@@ -1,0 +1,49 @@
+server:
+  port: 8080
+  mode: "dev"
+  host: "localhost"
+
+mongodb:
+  host: ${MONGODB_HOST}
+  port: ${MONGODB_PORT}
+  username: ${MONGODB_USERNAME}
+  password: ${MONGODB_PASSWORD}
+  database: ${MONGODB_DATABASE}
+  timeout: 10
+  max_pool_size: 50
+  min_pool_size: 5
+  max_conn_idle_time: 300
+
+redis:
+  host: ${REDIS_HOST}
+  port: ${REDIS_PORT}
+  password: ${REDIS_PASSWORD}
+  database: ${REDIS_DATABASE}
+  pool_size: 100
+  min_idle_conns: 5
+  pool_timeout: 5
+  dial_timeout: 5
+  read_timeout: 3
+  write_timeout: 3
+  max_retries: 3
+  max_retry_backoff: 500
+  min_retry_backoff: 300
+
+kafka:
+  brokers:
+     - ${KAFKA_BROKER_1}
+  flush_frequency: 500
+  flush_bytes: 16384
+  max_message_bytes: 1000000
+  timeout: 10
+  max_retries: 3
+  retry_backoff: 100
+  max_processing_time: 600
+  consumer_batch_size: 100
+  consumer_batch_interval: 1000
+
+elasticsearch:
+  addresses:
+    - "${ELASTICSEARCH_ADDRESS_1}"
+  username: ""
+  password: ""
