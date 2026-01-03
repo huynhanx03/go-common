@@ -9,14 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"go.mongodb.org/mongo-driver/bson"
+	"github.com/huynhanx03/go-common/pkg/dto"
+	"github.com/huynhanx03/go-common/pkg/settings"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/wait"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
-
-	"github.com/huynhanx03/go-common/pkg/settings"
 )
 
 const (
@@ -24,24 +23,12 @@ const (
 	mongoPort  = "27017/tcp"
 )
 
-type TestDocument struct {
-	ID        primitive.ObjectID `bson:"_id,omitempty"`
-	Name      string             `bson:"name"`
-	Value     int                `bson:"value"`
-	CreatedAt time.Time          `bson:"created_at"`
-	UpdatedAt time.Time          `bson:"updated_at"`
-}
-
-func (d *TestDocument) SetID(id primitive.ObjectID) {
-	d.ID = id
-}
-
-func (d *TestDocument) UpdateTimestamp() {
-	d.UpdatedAt = time.Now()
-}
-
-func (d *TestDocument) GetID() primitive.ObjectID {
-	return d.ID
+// TestModel mirrors the user's struct pattern
+// Embeds *BaseModel
+type TestModel struct {
+	*BaseModel `bson:",inline"`
+	Name       string `bson:"name"`
+	Value      int    `bson:"value"`
 }
 
 func TestClient_Integration(t *testing.T) {
@@ -89,14 +76,11 @@ func TestClient_Integration(t *testing.T) {
 
 	db := mongoClient.Database("testdb")
 	col := db.Collection("test_collection")
-	repo := NewBaseRepository[*TestDocument](col)
+	// T is TestModel (struct embedding *BaseModel)
+	repo := NewBaseRepository[TestModel](col)
 
 	t.Run("Create", func(t *testing.T) {
 		testCreate(t, ctx, repo)
-	})
-
-	t.Run("Get", func(t *testing.T) {
-		testGet(t, ctx, repo)
 	})
 
 	t.Run("Update", func(t *testing.T) {
@@ -107,80 +91,186 @@ func TestClient_Integration(t *testing.T) {
 		testDelete(t, ctx, repo)
 	})
 
-	t.Run("DeleteMany", func(t *testing.T) {
-		testDeleteMany(t, ctx, repo)
+	t.Run("Get", func(t *testing.T) {
+		testGet(t, ctx, repo)
+	})
+
+	t.Run("Find", func(t *testing.T) {
+		testFind(t, ctx, repo)
+	})
+
+	t.Run("Exists", func(t *testing.T) {
+		testExists(t, ctx, repo)
+	})
+
+	t.Run("BatchCreate", func(t *testing.T) {
+		testBatchCreate(t, ctx, repo)
+	})
+
+	t.Run("BatchDelete", func(t *testing.T) {
+		testBatchDelete(t, ctx, repo)
 	})
 }
 
-func testCreate(t *testing.T, ctx context.Context, repo *BaseRepository[*TestDocument]) {
-	doc := &TestDocument{
-		Name:      "test-doc",
+// T is TestModel. *T is *TestModel.
+func testCreate(t *testing.T, ctx context.Context, repo *BaseRepository[TestModel]) {
+	model := TestModel{
+		BaseModel: NewBaseModel(), // Initialize embedded pointer
+		Name:      "test-model",
 		Value:     100,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
 	}
-	if err := repo.Create(ctx, &doc); err != nil {
-		t.Fatalf("Failed to create doc: %v", err)
+	// Create expects *T -> *TestModel.
+	if err := repo.Create(ctx, &model); err != nil {
+		t.Fatalf("Failed to create model: %v", err)
 	}
-	if doc.ID.IsZero() {
-		t.Error("Document ID should be set after create")
+	if model.GetID().IsZero() {
+		t.Error("Model ID should be set (or pre-set) after create")
 	}
 }
 
-func testGet(t *testing.T, ctx context.Context, repo *BaseRepository[*TestDocument]) {
-	doc := &TestDocument{Name: "get-doc", Value: 200}
-	repo.Create(ctx, &doc)
+func testGet(t *testing.T, ctx context.Context, repo *BaseRepository[TestModel]) {
+	model := TestModel{BaseModel: NewBaseModel(), Name: "get-model", Value: 200}
+	repo.Create(ctx, &model)
 
-	fetched, err := repo.Get(ctx, doc.ID)
+	fetched, err := repo.Get(ctx, model.GetID())
 	if err != nil {
-		t.Fatalf("Failed to get doc: %v", err)
+		t.Fatalf("Failed to get model: %v", err)
 	}
-	if (*fetched).Name != "get-doc" {
-		t.Errorf("Expected Name 'get-doc', got '%s'", (*fetched).Name)
-	}
-}
-
-func testUpdate(t *testing.T, ctx context.Context, repo *BaseRepository[*TestDocument]) {
-	doc := &TestDocument{Name: "update-doc", Value: 300}
-	repo.Create(ctx, &doc)
-
-	doc.Value = 400
-	if err := repo.Update(ctx, doc.ID, &doc); err != nil {
-		t.Fatalf("Failed to update doc: %v", err)
-	}
-
-	fetched, _ := repo.Get(ctx, doc.ID)
-	if (*fetched).Value != 400 {
-		t.Errorf("Expected Value 400, got %d", (*fetched).Value)
+	// fetched is *T -> *TestModel
+	if fetched.Name != "get-model" {
+		t.Errorf("Expected Name 'get-model', got '%s'", fetched.Name)
 	}
 }
 
-func testDelete(t *testing.T, ctx context.Context, repo *BaseRepository[*TestDocument]) {
-	doc := &TestDocument{Name: "delete-doc", Value: 500}
-	repo.Create(ctx, &doc)
+func testUpdate(t *testing.T, ctx context.Context, repo *BaseRepository[TestModel]) {
+	model := TestModel{BaseModel: NewBaseModel(), Name: "update-model", Value: 300}
+	repo.Create(ctx, &model)
 
-	if err := repo.Delete(ctx, doc.ID); err != nil {
-		t.Fatalf("Failed to delete doc: %v", err)
+	model.Value = 400
+	model.Name = "Updated Name"
+	if err := repo.Update(ctx, &model); err != nil {
+		t.Fatalf("Failed to update model: %v", err)
 	}
 
-	exists, _ := repo.Exists(ctx, doc.ID)
+	fetched, _ := repo.Get(ctx, model.GetID())
+	if fetched.Value != 400 {
+		t.Errorf("Expected Value 400, got %d", fetched.Value)
+	}
+	if fetched.Name != "Updated Name" {
+		t.Errorf("Expected Name 'Updated Name', got '%s'", fetched.Name)
+	}
+}
+
+func testDelete(t *testing.T, ctx context.Context, repo *BaseRepository[TestModel]) {
+	model := TestModel{BaseModel: NewBaseModel(), Name: "delete-model", Value: 500}
+	repo.Create(ctx, &model)
+
+	if err := repo.Delete(ctx, model.GetID()); err != nil {
+		t.Fatalf("Failed to delete model: %v", err)
+	}
+
+	exists, _ := repo.Exists(ctx, model.GetID())
 	if exists {
-		t.Error("Document should not exist after delete")
+		t.Error("Model should not exist after delete")
 	}
 }
 
-func testDeleteMany(t *testing.T, ctx context.Context, repo *BaseRepository[*TestDocument]) {
-	doc1 := &TestDocument{Name: "batch-delete", Value: 1}
-	doc2 := &TestDocument{Name: "batch-delete", Value: 2}
-	repo.Create(ctx, &doc1)
-	repo.Create(ctx, &doc2)
+func testBatchDelete(t *testing.T, ctx context.Context, repo *BaseRepository[TestModel]) {
+	model1 := TestModel{BaseModel: NewBaseModel(), Name: "batch-delete-1", Value: 1}
+	model2 := TestModel{BaseModel: NewBaseModel(), Name: "batch-delete-2", Value: 2}
 
-	count, err := repo.DeleteMany(ctx, bson.M{"name": "batch-delete"})
-	if err != nil {
-		t.Fatalf("Failed to delete many: %v", err)
+	// BatchCreate expects []*T -> []*TestModel
+	models := []*TestModel{&model1, &model2}
+	if err := repo.BatchCreate(ctx, models); err != nil {
+		t.Fatalf("Failed to batch create: %v", err)
 	}
-	if count != 2 {
-		t.Errorf("Expected 2 deleted, got %d", count)
+
+	// Test BatchDelete
+	ids := []primitive.ObjectID{model1.GetID(), model2.GetID()}
+	if err := repo.BatchDelete(ctx, ids); err != nil {
+		t.Fatalf("Failed to batch delete: %v", err)
+	}
+
+	// Verify deletion
+	exists1, _ := repo.Exists(ctx, model1.GetID())
+	exists2, _ := repo.Exists(ctx, model2.GetID())
+	if exists1 || exists2 {
+		t.Error("Models should be deleted")
+	}
+}
+
+func testFind(t *testing.T, ctx context.Context, repo *BaseRepository[TestModel]) {
+	model1 := TestModel{BaseModel: NewBaseModel(), Name: "find-model-1", Value: 10}
+	model2 := TestModel{BaseModel: NewBaseModel(), Name: "find-model-2", Value: 20}
+	model3 := TestModel{BaseModel: NewBaseModel(), Name: "other-model", Value: 30}
+	repo.Create(ctx, &model1)
+	repo.Create(ctx, &model2)
+	repo.Create(ctx, &model3)
+
+	// Test Find with Filter
+	opts := &dto.QueryOptions{
+		Filters: []dto.SearchFilter{
+			{Key: "name", Value: "find-model", Type: "search"},
+		},
+		Pagination: &dto.PaginationOptions{
+			Page:     1,
+			PageSize: 10,
+		},
+	}
+
+	result, err := repo.Find(ctx, opts)
+	if err != nil {
+		t.Fatalf("Failed to find models: %v", err)
+	}
+
+	if result.Pagination.TotalItems != 2 {
+		t.Errorf("Expected 2 items, got %d", result.Pagination.TotalItems)
+	}
+	if len(*result.Records) != 2 {
+		t.Errorf("Expected 2 records, got %d", len(*result.Records))
+	}
+}
+
+func testExists(t *testing.T, ctx context.Context, repo *BaseRepository[TestModel]) {
+	model := TestModel{BaseModel: NewBaseModel(), Name: "exists-model", Value: 600}
+	repo.Create(ctx, &model)
+
+	exists, err := repo.Exists(ctx, model.GetID())
+	if err != nil {
+		t.Fatalf("Failed to check exists: %v", err)
+	}
+	if !exists {
+		t.Error("Model should exist")
+	}
+
+	exists, err = repo.Exists(ctx, primitive.NewObjectID())
+	if err != nil {
+		t.Fatalf("Failed to check exists: %v", err)
+	}
+	if exists {
+		t.Error("Random model should not exist")
+	}
+}
+
+func testBatchCreate(t *testing.T, ctx context.Context, repo *BaseRepository[TestModel]) {
+	model1 := TestModel{BaseModel: NewBaseModel(), Name: "batch-create-1", Value: 1000}
+	model2 := TestModel{BaseModel: NewBaseModel(), Name: "batch-create-2", Value: 2000}
+
+	models := []*TestModel{&model1, &model2}
+	if err := repo.BatchCreate(ctx, models); err != nil {
+		t.Fatalf("Failed to batch create: %v", err)
+	}
+
+	// Verify IDs set
+	if model1.GetID().IsZero() || model2.GetID().IsZero() {
+		t.Error("IDs should be set after batch create")
+	}
+
+	// Verify existence
+	exists1, _ := repo.Exists(ctx, model1.GetID())
+	exists2, _ := repo.Exists(ctx, model2.GetID())
+	if !exists1 || !exists2 {
+		t.Error("Batch created models should exist")
 	}
 }
 

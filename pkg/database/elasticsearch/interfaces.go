@@ -1,11 +1,11 @@
 package elasticsearch
 
 import (
-	"context"
 	"io"
 	"net/http"
 
 	"github.com/elastic/go-elasticsearch/v8/esapi"
+	"github.com/huynhanx03/go-common/pkg/database"
 )
 
 // ElasticClient defines the contract for Elasticsearch client operations
@@ -23,18 +23,11 @@ type ElasticClient interface {
 	Perform(*http.Request) (*http.Response, error)
 }
 
-// Document interface that all models must implement
-type Document interface {
+// Model interface that all models must implement
+type Model interface {
 	GetID() string
 	SetID(id string)
 }
 
-// Repository defines the common interface for all repositories
-type Repository[T Document] interface {
-	Get(ctx context.Context, docID string) (*T, error)
-	Index(ctx context.Context, doc *T) error
-	Delete(ctx context.Context, docID string) error
-	Search(ctx context.Context, query io.Reader) ([]T, error)
-	BatchIndex(ctx context.Context, docs []*T) error
-	BatchDelete(ctx context.Context, docIDs []string) error
-}
+// Repository aliases the common interface
+type Repository[T Model] database.Repository[T, string]
