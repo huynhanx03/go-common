@@ -1,34 +1,83 @@
 package mongodb
 
 import (
-	"go.mongodb.org/mongo-driver/mongo/options"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"github.com/huynhanx03/go-common/pkg/dto"
 )
 
-// GetPaginationOptions creates MongoDB options for pagination
-func GetPaginationOptions(p *dto.PaginationOptions) *options.FindOptions {
-	limit := int64(p.PageSize)
+// ApplyQueryOptions builds MongoDB filter and options from QueryOptions
+func ApplyQueryOptions(opts *dto.QueryOptions) (bson.M, *options.FindOptions) {
+	if opts == nil {
+		opts = &dto.QueryOptions{}
+	}
+	if opts.Pagination == nil {
+		opts.Pagination = &dto.PaginationOptions{}
+	}
+	opts.Pagination.SetDefaults()
 
-	findOptions := &options.FindOptions{
-		Limit: &limit,
+	// Build Filter
+	filter := BuildFilter(&opts.Filters)
+	if filter == nil {
+		filter = bson.M{}
 	}
 
-	// Only use skip if no cursor is provided
-	if p.Cursor == "" {
-		skip := int64((p.Page - 1) * p.PageSize)
+	// Build Sort
+	sort := BuildSort(&opts.Sort)
+
+	// Pagination & Cursor
+	limit := int64(opts.Pagination.PageSize)
+	findOptions := &options.FindOptions{
+		Limit: &limit,
+		Sort:  sort,
+	}
+
+	if opts.Pagination.Cursor != nil && opts.Pagination.Cursor != "" {
+		var cursorVal interface{} = opts.Pagination.Cursor
+		if str, ok := opts.Pagination.Cursor.(string); ok {
+			if oid, err := primitive.ObjectIDFromHex(str); err == nil {
+				cursorVal = oid
+			}
+		}
+
+		isAsc := false
+		for _, s := range opts.Sort {
+			if s.Key == "_id" || s.Key == "id" {
+				if s.Order == 1 {
+					isAsc = true
+				}
+				break
+			}
+		}
+
+		cursorFilter := bson.M{}
+		if isAsc {
+			cursorFilter["_id"] = bson.M{"$gt": cursorVal}
+		} else {
+			cursorFilter["_id"] = bson.M{"$lt": cursorVal}
+		}
+
+		if _, ok := filter["_id"]; ok {
+			filter = bson.M{"$and": []bson.M{filter, cursorFilter}}
+		} else {
+			for k, v := range cursorFilter {
+				filter[k] = v
+			}
+		}
+	} else {
+		skip := int64((opts.Pagination.Page - 1) * opts.Pagination.PageSize)
 		findOptions.Skip = &skip
 	}
 
-	return findOptions
+	return filter, findOptions
 }
 
 // BuildFilter creates MongoDB filter from SearchFilter slice
 func BuildFilter(filters *[]dto.SearchFilter) bson.M {
 	filter := bson.M{}
-	
+
 	if filters == nil {
 		return filter
 	}

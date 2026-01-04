@@ -5,7 +5,6 @@ import (
 )
 
 // BuildSearchQuery constructs the complete Elasticsearch body
-// This is a wrapper that composes the parts, keeping usage simple
 func BuildSearchQuery(opts *dto.QueryOptions) map[string]any {
 	if opts == nil {
 		opts = &dto.QueryOptions{}
@@ -13,24 +12,23 @@ func BuildSearchQuery(opts *dto.QueryOptions) map[string]any {
 
 	body := make(map[string]any)
 
-	// 1. Pagination
+	// Pagination
 	pagination := BuildPagination(opts.Pagination)
 	for k, v := range pagination {
 		body[k] = v
 	}
 
-	// 2. Query (Filters)
+	// Filters
 	query := BuildFilter(&opts.Filters)
 	if len(query) > 0 {
 		body["query"] = query
 	} else {
-		// Default to match_all if no filters are provided
 		body["query"] = map[string]any{
 			"match_all": map[string]any{},
 		}
 	}
 
-	// 3. Sorting
+	// Sorting
 	sort := BuildSort(&opts.Sort)
 	if len(sort) > 0 {
 		body["sort"] = sort
@@ -41,14 +39,30 @@ func BuildSearchQuery(opts *dto.QueryOptions) map[string]any {
 
 // BuildPagination creates ES pagination fields
 func BuildPagination(p *dto.PaginationOptions) map[string]any {
-	result := make(map[string]any)
 	if p == nil {
 		p = &dto.PaginationOptions{}
 	}
 	p.SetDefaults()
 
+	result := map[string]any{
+		"size": p.PageSize,
+	}
+
+	// Use search_after if cursor is present (Keyset Pagination)
+	if p.Cursor != nil && p.Cursor != "" {
+		// If cursor is a slice (multi-field sort), use it directly
+		if cursorSlice, ok := p.Cursor.([]any); ok {
+			result["search_after"] = cursorSlice
+			return result
+		}
+		// If cursor is a single value (e.g. ID), wrap it in a slice
+		// This assumes the query is sorted by a single field (like _id)
+		result["search_after"] = []any{p.Cursor}
+		return result
+	}
+
+	// Fallback to Offset Pagination
 	result["from"] = (p.Page - 1) * p.PageSize
-	result["size"] = p.PageSize
 	return result
 }
 
@@ -109,11 +123,11 @@ func BuildFilter(filters *[]dto.SearchFilter) map[string]any {
 
 // BuildSort creates ES sort list
 func BuildSort(sorts *[]dto.SortOption) []map[string]any {
-	var esSort []map[string]any
-
 	if sorts == nil {
 		return nil
 	}
+
+	var esSort []map[string]any
 
 	for _, s := range *sorts {
 		order := "asc"

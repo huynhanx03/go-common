@@ -1,5 +1,11 @@
 package constraints
 
+// ID defines the supported types for entity identifiers.
+// It allows both integer and string (e.g. UUID) IDs.
+type ID interface {
+	~int | ~string
+}
+
 // Signed is a constraint that permits any signed integer type.
 type Signed interface {
 	~int | ~int8 | ~int16 | ~int32 | ~int64

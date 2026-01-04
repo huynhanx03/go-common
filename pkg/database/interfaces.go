@@ -12,7 +12,7 @@ type Repository[T any, ID any] interface {
 	Update(ctx context.Context, model *T) error
 	Delete(ctx context.Context, id ID) error
 	Get(ctx context.Context, id ID) (*T, error)
-	Find(ctx context.Context, opts *dto.QueryOptions) (*dto.Paginated[T], error)
+	Find(ctx context.Context, opts *dto.QueryOptions) (*dto.Paginated[*T], error)
 
 	Exists(ctx context.Context, id ID) (bool, error)
 

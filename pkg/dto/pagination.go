@@ -15,9 +15,9 @@ type SortOption struct {
 
 // PaginationOptions represents pagination parameters
 type PaginationOptions struct {
-	Page     int    `json:"page" form:"page" binding:"min=1"`
-	PageSize int    `json:"page_size" form:"page_size" binding:"min=1,max=100"`
-	Cursor   string `json:"cursor" form:"cursor"` // Cursor for keyset pagination (optional)
+	Page     int `json:"page" form:"page" binding:"min=1"`
+	PageSize int `json:"page_size" form:"page_size" binding:"min=1,max=100"`
+	Cursor   any `json:"cursor" form:"cursor"` // Cursor for keyset pagination (optional)
 }
 
 // QueryOptions combines pagination, search/filter, and sorting

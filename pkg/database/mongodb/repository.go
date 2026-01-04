@@ -88,7 +88,7 @@ func (r *BaseRepository[T]) Exists(ctx context.Context, id primitive.ObjectID) (
 }
 
 // Find retrieves documents with pagination, search/filter, and sorting
-func (r *BaseRepository[T]) Find(ctx context.Context, opts *dto.QueryOptions) (*dto.Paginated[T], error) {
+func (r *BaseRepository[T]) Find(ctx context.Context, opts *dto.QueryOptions) (*dto.Paginated[*T], error) {
 	if opts == nil {
 		opts = &dto.QueryOptions{}
 	}
@@ -97,17 +97,9 @@ func (r *BaseRepository[T]) Find(ctx context.Context, opts *dto.QueryOptions) (*
 	}
 	opts.Pagination.SetDefaults()
 
-	// Build filter from search/filter options
-	filter := BuildFilter(&opts.Filters)
+	// Build filter and options using unified helper
+	filter, findOpts := ApplyQueryOptions(opts)
 
-	// Cursor pagination: if cursor is present, filter by _id < cursor (assuming desc sort)
-	if opts.Pagination.Cursor != "" {
-		if oid, err := primitive.ObjectIDFromHex(opts.Pagination.Cursor); err == nil {
-			filter["_id"] = bson.M{"$lt": oid}
-		}
-	}
-
-	// Count total documents
 	totalItems, err := r.collection.CountDocuments(ctx, filter)
 	if err != nil {
 		return nil, err
@@ -116,26 +108,19 @@ func (r *BaseRepository[T]) Find(ctx context.Context, opts *dto.QueryOptions) (*
 	// Calculate pagination info
 	pagination := dto.CalculatePagination(opts.Pagination.Page, opts.Pagination.PageSize, totalItems)
 
-	// Build sort from sort options
-	sort := BuildSort(&opts.Sort)
-
-	// Find documents with pagination and sorting
-	findOpts := GetPaginationOptions(opts.Pagination)
-	findOpts.SetSort(sort)
-
 	cursor, err := r.collection.Find(ctx, filter, findOpts)
 	if err != nil {
 		return nil, err
 	}
 	defer cursor.Close(ctx)
 
-	// Decode documents
-	var records []T
+	// Decode documents into slice of pointers
+	var records []*T
 	if err := cursor.All(ctx, &records); err != nil {
 		return nil, err
 	}
 
-	return &dto.Paginated[T]{
+	return &dto.Paginated[*T]{
 		Records:    &records,
 		Pagination: pagination,
 	}, nil

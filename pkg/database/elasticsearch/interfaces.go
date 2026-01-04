@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/elastic/go-elasticsearch/v8/esapi"
+	"github.com/huynhanx03/go-common/pkg/constraints"
 	"github.com/huynhanx03/go-common/pkg/database"
 )
 
@@ -24,10 +25,10 @@ type ElasticClient interface {
 }
 
 // Model interface that all models must implement
-type Model interface {
-	GetID() string
-	SetID(id string)
+type Model[ID constraints.ID] interface {
+	GetID() ID
+	SetID(id ID)
 }
 
 // Repository aliases the common interface
-type Repository[T Model] database.Repository[T, string]
+type Repository[T Model[ID], ID constraints.ID] database.Repository[T, ID]

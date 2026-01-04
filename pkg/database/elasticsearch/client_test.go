@@ -22,21 +22,9 @@ const (
 
 // TestDocument implements Document interface
 type TestDocument struct {
-	ID        string    `json:"id"`
-	Title     string    `json:"title"`
-	Value     int       `json:"value"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-// GetID implements Document interface
-func (d *TestDocument) GetID() string {
-	return d.ID
-}
-
-// SetID implements Document interface
-func (d *TestDocument) SetID(id string) {
-	d.ID = id
+	*BaseModel[string] `bson:",inline"`
+	Title              string `json:"title"`
+	Value              int    `json:"value"`
 }
 
 func TestClient_Integration(t *testing.T) {
@@ -61,9 +49,7 @@ func TestClient_Integration(t *testing.T) {
 		t.Fatalf("Failed to create client: %v", err)
 	}
 
-	// T is *TestDocument because Repository[T] requires T to implement Document interface
-	// *TestDocument implements Document.
-	repo := NewBaseRepository[*TestDocument](client, "test-index")
+	repo := NewBaseRepository[TestDocument, string](client, "test-index")
 
 	t.Run("Create", func(t *testing.T) {
 		testCreate(t, ctx, repo)
@@ -98,42 +84,43 @@ func TestClient_Integration(t *testing.T) {
 	})
 }
 
-// Ensure T is *TestDocument
-func testCreate(t *testing.T, ctx context.Context, repo *BaseRepository[*TestDocument]) {
+// Ensure T is TestDocument
+func testCreate(t *testing.T, ctx context.Context, repo *BaseRepository[TestDocument, string]) {
+	bm := NewBaseModel[string]("1")
 	doc := &TestDocument{
-		ID:        "1",
+		BaseModel: &bm,
 		Title:     "create-doc",
 		Value:     100,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
 	}
-	// repo.Create takes *T. T is *TestDocument. So we pass **TestDocument.
-	if err := repo.Create(ctx, &doc); err != nil {
+	// repo.Create takes *T. T is TestDocument. So we pass *TestDocument.
+	if err := repo.Create(ctx, doc); err != nil {
 		t.Fatalf("Failed to create doc: %v", err)
 	}
 }
 
-func testGet(t *testing.T, ctx context.Context, repo *BaseRepository[*TestDocument]) {
-	doc := &TestDocument{ID: "2", Title: "get-doc", Value: 200, CreatedAt: time.Now()}
-	repo.Create(ctx, &doc)
+func testGet(t *testing.T, ctx context.Context, repo *BaseRepository[TestDocument, string]) {
+	bm := NewBaseModel[string]("2")
+	doc := &TestDocument{BaseModel: &bm, Title: "get-doc", Value: 200}
+	repo.Create(ctx, doc)
 
 	fetched, err := repo.Get(ctx, "2")
 	if err != nil {
 		t.Fatalf("Failed to get doc: %v", err)
 	}
-	// fetched is *T -> **TestDocument
+	// fetched is *T -> *TestDocument
 	if (*fetched).Title != "get-doc" {
 		t.Errorf("Expected Title 'get-doc', got '%s'", (*fetched).Title)
 	}
 }
 
-func testUpdate(t *testing.T, ctx context.Context, repo *BaseRepository[*TestDocument]) {
-	doc := &TestDocument{ID: "3", Title: "update-doc", Value: 300, CreatedAt: time.Now()}
-	repo.Create(ctx, &doc)
+func testUpdate(t *testing.T, ctx context.Context, repo *BaseRepository[TestDocument, string]) {
+	bm := NewBaseModel[string]("3")
+	doc := &TestDocument{BaseModel: &bm, Title: "update-doc", Value: 300}
+	repo.Create(ctx, doc)
 
 	doc.Value = 400
 	doc.Title = "updated-title"
-	if err := repo.Update(ctx, &doc); err != nil {
+	if err := repo.Update(ctx, doc); err != nil {
 		t.Fatalf("Failed to update doc: %v", err)
 	}
 
@@ -143,9 +130,10 @@ func testUpdate(t *testing.T, ctx context.Context, repo *BaseRepository[*TestDoc
 	}
 }
 
-func testDelete(t *testing.T, ctx context.Context, repo *BaseRepository[*TestDocument]) {
-	doc := &TestDocument{ID: "4", Title: "delete-doc", Value: 400, CreatedAt: time.Now()}
-	repo.Create(ctx, &doc)
+func testDelete(t *testing.T, ctx context.Context, repo *BaseRepository[TestDocument, string]) {
+	bm := NewBaseModel[string]("4")
+	doc := &TestDocument{BaseModel: &bm, Title: "delete-doc", Value: 400}
+	repo.Create(ctx, doc)
 
 	if err := repo.Delete(ctx, "4"); err != nil {
 		t.Fatalf("Failed to delete doc: %v", err)
@@ -157,9 +145,10 @@ func testDelete(t *testing.T, ctx context.Context, repo *BaseRepository[*TestDoc
 	}
 }
 
-func testExists(t *testing.T, ctx context.Context, repo *BaseRepository[*TestDocument]) {
-	doc := &TestDocument{ID: "5", Title: "exists-doc", Value: 500, CreatedAt: time.Now()}
-	repo.Create(ctx, &doc)
+func testExists(t *testing.T, ctx context.Context, repo *BaseRepository[TestDocument, string]) {
+	bm := NewBaseModel[string]("5")
+	doc := &TestDocument{BaseModel: &bm, Title: "exists-doc", Value: 500}
+	repo.Create(ctx, doc)
 
 	exists, err := repo.Exists(ctx, "5")
 	if err != nil || !exists {
@@ -172,12 +161,14 @@ func testExists(t *testing.T, ctx context.Context, repo *BaseRepository[*TestDoc
 	}
 }
 
-func testBatchCreate(t *testing.T, ctx context.Context, repo *BaseRepository[*TestDocument]) {
-	doc1 := &TestDocument{ID: "6", Title: "batch-1", Value: 600, CreatedAt: time.Now()}
-	doc2 := &TestDocument{ID: "7", Title: "batch-2", Value: 700, CreatedAt: time.Now()}
+func testBatchCreate(t *testing.T, ctx context.Context, repo *BaseRepository[TestDocument, string]) {
+	bm1 := NewBaseModel[string]("6")
+	doc1 := &TestDocument{BaseModel: &bm1, Title: "batch-1", Value: 600}
+	bm2 := NewBaseModel[string]("7")
+	doc2 := &TestDocument{BaseModel: &bm2, Title: "batch-2", Value: 700}
 
-	// repo.BatchCreate takes []*T. T=*TestDocument. So []*(*TestDocument).
-	docs := []*(*TestDocument){&doc1, &doc2}
+	// repo.BatchCreate takes []*T. T=TestDocument. So []*(TestDocument).
+	docs := []*TestDocument{doc1, doc2}
 
 	if err := repo.BatchCreate(ctx, docs); err != nil {
 		t.Fatalf("Failed to batch create: %v", err)
@@ -190,11 +181,13 @@ func testBatchCreate(t *testing.T, ctx context.Context, repo *BaseRepository[*Te
 	}
 }
 
-func testBatchDelete(t *testing.T, ctx context.Context, repo *BaseRepository[*TestDocument]) {
-	doc1 := &TestDocument{ID: "8", Title: "batch-del-1", Value: 800, CreatedAt: time.Now()}
-	doc2 := &TestDocument{ID: "9", Title: "batch-del-2", Value: 900, CreatedAt: time.Now()}
-	repo.Create(ctx, &doc1)
-	repo.Create(ctx, &doc2)
+func testBatchDelete(t *testing.T, ctx context.Context, repo *BaseRepository[TestDocument, string]) {
+	bm1 := NewBaseModel[string]("8")
+	doc1 := &TestDocument{BaseModel: &bm1, Title: "batch-del-1", Value: 800}
+	bm2 := NewBaseModel[string]("9")
+	doc2 := &TestDocument{BaseModel: &bm2, Title: "batch-del-2", Value: 900}
+	repo.Create(ctx, doc1)
+	repo.Create(ctx, doc2)
 
 	if err := repo.BatchDelete(ctx, []string{"8", "9"}); err != nil {
 		t.Fatalf("Failed to batch delete: %v", err)
@@ -207,15 +200,18 @@ func testBatchDelete(t *testing.T, ctx context.Context, repo *BaseRepository[*Te
 	}
 }
 
-func testFind(t *testing.T, ctx context.Context, repo *BaseRepository[*TestDocument]) {
+func testFind(t *testing.T, ctx context.Context, repo *BaseRepository[TestDocument, string]) {
 	// Give ES some time to index everything properly explicitly
 	time.Sleep(1 * time.Second)
 
-	doc1 := &TestDocument{ID: "10", Title: "find-me-1", Value: 1000, CreatedAt: time.Now()}
-	doc2 := &TestDocument{ID: "11", Title: "find-me-2", Value: 1100, CreatedAt: time.Now()}
-	doc3 := &TestDocument{ID: "12", Title: "other-one", Value: 1200, CreatedAt: time.Now()}
+	bm1 := NewBaseModel[string]("10")
+	doc1 := &TestDocument{BaseModel: &bm1, Title: "find-me-1", Value: 1000}
+	bm2 := NewBaseModel[string]("11")
+	doc2 := &TestDocument{BaseModel: &bm2, Title: "find-me-2", Value: 1100}
+	bm3 := NewBaseModel[string]("12")
+	doc3 := &TestDocument{BaseModel: &bm3, Title: "other-one", Value: 1200}
 
-	docs := []*(*TestDocument){&doc1, &doc2, &doc3}
+	docs := []*TestDocument{doc1, doc2, doc3}
 	repo.BatchCreate(ctx, docs)
 	time.Sleep(1 * time.Second) // Ensure index refresh
 
@@ -237,7 +233,6 @@ func testFind(t *testing.T, ctx context.Context, repo *BaseRepository[*TestDocum
 	if res.Pagination.TotalItems != 2 {
 		t.Errorf("Expected 2 items, got %d", res.Pagination.TotalItems)
 	}
-	// Records is *[]T. T is *TestDocument. So *[]*TestDocument.
 	records := *res.Records
 	if len(records) != 2 {
 		t.Errorf("Expected 2 records, got %d", len(records))
