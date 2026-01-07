@@ -7,9 +7,10 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/elastic/go-elasticsearch/v8/esapi"
 	"github.com/huynhanx03/go-common/pkg/constraints"
 	"github.com/huynhanx03/go-common/pkg/dto"
+
+	"github.com/elastic/go-elasticsearch/v8/esapi"
 )
 
 // BaseRepository provides common database operations using generics

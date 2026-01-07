@@ -4,8 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/IBM/sarama"
 	"github.com/huynhanx03/go-common/pkg/utils"
+
+	"github.com/IBM/sarama"
 )
 
 // asyncProducer wraps sarama.AsyncProducer

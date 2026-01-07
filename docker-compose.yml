@@ -1,38 +1,93 @@
 version: "3.8"
 
 services:
+  mysql:
+    image: mysql:8.0
+    container_name: common-mysql
+    ports:
+      - "3306:3306"
+    command: --default-authentication-plugin=mysql_native_password --server-id=1 --log-bin=mysql-bin --binlog-format=row
+    environment:
+      - MYSQL_ROOT_PASSWORD=root
+
   mongodb:
     image: mongo:6
-    container_name: mongodb
+    container_name: common-mongodb
+    command: ["--replSet", "rs0", "--bind_ip_all"]
     ports:
       - "27017:27017"
+    healthcheck:
+      test: echo "try { rs.status() } catch (err) { rs.initiate({_id:'rs0',members:[{_id:0,host:'common-mongodb:27017'}]}) }" | mongosh --port 27017 --quiet
+      interval: 5s
+      timeout: 30s
+      start_period: 0s
+      retries: 30
 
   redis:
     image: redis:7-alpine
-    container_name: redis
+    container_name: common-redis
     ports:
       - "6379:6379"
 
   elasticsearch:
     image: elastic/elasticsearch:8.18.8
-    container_name: elasticsearch
+    container_name: common-elasticsearch
     environment:
       - discovery.type=single-node
       - xpack.security.enabled=false
     ports:
       - "9200:9200"
 
-  kafka:
-    image: apache/kafka:4.1.0
-    container_name: kafka
+  kibana:
+    image: kibana:8.13.4
+    container_name: common-kibana
     ports:
-      - "9092:9092"
-      - "9093:9093"
+      - "5601:5601"
     environment:
-      - KAFKA_KRAFT_MODE=yes
-      - KAFKA_NODE_ID=1
-      - KAFKA_PROCESS_ROLES=controller,broker
-      - KAFKA_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
-      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
-      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
-      - KAFKA_CONTROLLER_QUORUM_VOTERS=1@localhost:9093
+      - ELASTICSEARCH_HOSTS=http://common-elasticsearch:9200
+    depends_on:
+      - elasticsearch
+
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: common-kafka
+    ports:
+      - "29092:29092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@common-kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://common-kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: common-kafka-ui
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: common-kafka:9092
+    depends_on:
+      - kafka
+
+  debezium:
+    image: debezium/connect:2.7.3.Final
+    container_name: common-debezium
+    ports:
+      - "8083:8083"
+    environment:
+      - BOOTSTRAP_SERVERS=common-kafka:9092
+      - GROUP_ID=1
+      - CONFIG_STORAGE_TOPIC=my_connect_configs
+      - OFFSET_STORAGE_TOPIC=my_connect_offsets
+      - STATUS_STORAGE_TOPIC=my_connect_statuses
+    depends_on:
+      - kafka
+      - mongodb
+      - mysql

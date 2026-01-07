@@ -28,6 +28,15 @@ type CacheEngine interface {
 	// BatchDelete removes multiple keys from the cache.
 	BatchDelete(ctx context.Context, keys []string) error
 
+	// GeoAdd adds geospatial locations.
+	GeoAdd(ctx context.Context, key string, locations ...*GeoLocation) error
+
+	// GeoRemove removes members from a geospatial index.
+	GeoRemove(ctx context.Context, key string, members ...string) error
+
+	// GeoRadius searches for members within a radius.
+	GeoRadius(ctx context.Context, key string, longitude, latitude, radius float64, unit string) ([]*GeoLocation, error)
+
 	// Close closes the connection to the cache server.
 	Close()
 }

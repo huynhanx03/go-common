@@ -1,23 +1,29 @@
 package request
 
 import (
+	"io"
+
 	"github.com/gin-gonic/gin"
-	
+
+	"github.com/huynhanx03/go-common/pkg/common/apperr"
 	"github.com/huynhanx03/go-common/pkg/common/http/response"
 	"github.com/huynhanx03/go-common/pkg/common/http/validation"
 )
 
-func ParseRequest[T any](c *gin.Context) (*T, bool) {
+// ParseRequest parses and validates the request body
+func ParseRequest[T any](c *gin.Context) (*T, error) {
 	var req T
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.ErrorResponse(c, response.CodeParamInvalid, response.ToErrorResponse(err))
-		return nil, false
+
+	// Try to bind URI params (optional, ignore error if no tags)
+	_ = c.ShouldBindUri(&req)
+
+	if err := c.ShouldBindJSON(&req); err != nil && err != io.EOF {
+		return nil, apperr.New(response.CodeParamInvalid, err.Error(), 0, err)
 	}
 
 	if ok, msg := validation.IsRequestValid(req); !ok {
-		response.ErrorResponse(c, response.CodeValidationFailed, response.ToErrorResponse(msg))
-		return nil, false
+		return nil, apperr.New(response.CodeValidationFailed, string(msg), 0, nil)
 	}
 
-	return &req, true
+	return &req, nil
 }

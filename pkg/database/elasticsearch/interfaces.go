@@ -4,9 +4,10 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/elastic/go-elasticsearch/v8/esapi"
 	"github.com/huynhanx03/go-common/pkg/constraints"
 	"github.com/huynhanx03/go-common/pkg/database"
+
+	"github.com/elastic/go-elasticsearch/v8/esapi"
 )
 
 // ElasticClient defines the contract for Elasticsearch client operations

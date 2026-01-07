@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"reflect"
 
-	"entgo.io/ent/dialect/sql"
 	"github.com/huynhanx03/go-common/pkg/dto"
+
+	"entgo.io/ent/dialect/sql"
 )
 
 // ApplyQueryOptions applies pagination, filters, and sorting options to the Ent query builder.

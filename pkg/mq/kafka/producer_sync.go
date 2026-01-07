@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/IBM/sarama"
-	
+
 	"github.com/huynhanx03/go-common/pkg/utils"
 )
 

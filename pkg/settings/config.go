@@ -7,6 +7,20 @@ type Config struct {
 	Redis         Redis         `mapstructure:"redis"`
 	Kafka         Kafka         `mapstructure:"kafka"`
 	Elasticsearch Elasticsearch `mapstructure:"elasticsearch"`
+	Database      Database      `mapstructure:"database"`
+}
+
+// Database is the configuration for the database
+type Database struct {
+	Driver          string `mapstructure:"driver"`
+	Host            string `mapstructure:"host"`
+	Port            int    `mapstructure:"port"`
+	Username        string `mapstructure:"username"`
+	Password        string `mapstructure:"password"`
+	Database        string `mapstructure:"database"`
+	MaxOpenConns    int    `mapstructure:"max_open_conns"`
+	MaxIdleConns    int    `mapstructure:"max_idle_conns"`
+	ConnMaxLifetime int    `mapstructure:"conn_max_lifetime"`
 }
 
 // Server is the configuration for the server

@@ -169,14 +169,53 @@ func (r *RedisEngine) BatchSet(ctx context.Context, values map[string]any, ttl t
 
 // BatchDelete removes multiple keys from the cache
 func (r *RedisEngine) BatchDelete(ctx context.Context, keys []string) error {
+	return r.client.Del(ctx, keys...).Err()
+}
+
+// GeoAdd adds geospatial locations
+func (r *RedisEngine) GeoAdd(ctx context.Context, key string, locations ...*cache.GeoLocation) error {
 	r.rwMutex.Lock()
 	defer r.rwMutex.Unlock()
 
-	if len(keys) == 0 {
+	if len(locations) == 0 {
 		return nil
 	}
 
-	return r.client.Del(ctx, keys...).Err()
+	redisLocations := make([]*redisV9.GeoLocation, len(locations))
+	for i, loc := range locations {
+		redisLocations[i] = &redisV9.GeoLocation{
+			Name:      loc.Member,
+			Longitude: loc.Longitude,
+			Latitude:  loc.Latitude,
+		}
+	}
+
+	// Using pipeline for batch add
+	pipe := r.client.Pipeline()
+	pipe.GeoAdd(ctx, key, redisLocations...)
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+// GeoRemove removes members from a geospatial index
+func (r *RedisEngine) GeoRemove(ctx context.Context, key string, members ...string) error {
+	r.rwMutex.Lock()
+	defer r.rwMutex.Unlock()
+
+	if len(members) == 0 {
+		return nil
+	}
+
+	pipe := r.client.Pipeline()
+
+	interfaceMembers := make([]interface{}, len(members))
+	for i, m := range members {
+		interfaceMembers[i] = m
+	}
+
+	pipe.ZRem(ctx, key, interfaceMembers...)
+	_, err := pipe.Exec(ctx)
+	return err
 }
 
 // Close closes the Redis client
@@ -189,4 +228,37 @@ func (r *RedisEngine) Close() {
 // Client returns the underlying redis client (Escape hatch)
 func (r *RedisEngine) Client() *redisV9.Client {
 	return r.client
+}
+
+// GeoRadius searches for members within a radius.
+func (r *RedisEngine) GeoRadius(ctx context.Context, key string, longitude, latitude, radius float64, unit string) ([]*cache.GeoLocation, error) {
+	r.rwMutex.Lock()
+	defer r.rwMutex.Unlock()
+
+	// Use GeoSearchLocation (modern alternative to GeoRadius)
+	res, err := r.client.GeoSearchLocation(ctx, key, &redisV9.GeoSearchLocationQuery{
+		GeoSearchQuery: redisV9.GeoSearchQuery{
+			Longitude:  longitude,
+			Latitude:   latitude,
+			Radius:     radius,
+			RadiusUnit: unit,
+			Sort:       "ASC", // Sort by distance
+		},
+		WithCoord: true,
+		WithDist:  true,
+	}).Result()
+
+	if err != nil {
+		return nil, err
+	}
+
+	locations := make([]*cache.GeoLocation, len(res))
+	for i, item := range res {
+		locations[i] = &cache.GeoLocation{
+			Member:    item.Name,
+			Longitude: item.Longitude,
+			Latitude:  item.Latitude,
+		}
+	}
+	return locations, nil
 }

@@ -2,6 +2,7 @@ package mongodb
 
 import (
 	"github.com/huynhanx03/go-common/pkg/database"
+
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 )

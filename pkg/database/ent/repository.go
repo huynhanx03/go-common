@@ -11,29 +11,35 @@ import (
 )
 
 // BaseRepository implements generic repository operations for Ent.
-type BaseRepository[T Model[ID], ID constraints.ID] struct {
+type BaseRepository[T any, PT interface {
+	*T
+	Model[ID]
+}, ID constraints.ID] struct {
 	client any
 	meta   *entityMetadata
 }
 
 // NewBaseRepository creates a new repository and warms up reflection metadata.
-func NewBaseRepository[T Model[ID], ID constraints.ID](client any) *BaseRepository[T, ID] {
+func NewBaseRepository[T any, PT interface {
+	*T
+	Model[ID]
+}, ID constraints.ID](client any) *BaseRepository[T, PT, ID] {
 	meta, err := newEntityMetadata[T, ID](client)
 	if err != nil {
 		panic(fmt.Errorf("failed to initialize repository metadata: %w", err))
 	}
 
-	return &BaseRepository[T, ID]{
+	return &BaseRepository[T, PT, ID]{
 		client: client,
 		meta:   meta,
 	}
 }
 
-func (r *BaseRepository[T, ID]) getEntityClient() reflect.Value {
+func (r *BaseRepository[T, PT, ID]) getEntityClient() reflect.Value {
 	return reflect.ValueOf(r.client).Elem().Field(r.meta.ClientIndex)
 }
 
-func (r *BaseRepository[T, ID]) setFields(builder reflect.Value, modelVal reflect.Value) {
+func (r *BaseRepository[T, PT, ID]) setFields(builder reflect.Value, modelVal reflect.Value) {
 	for _, fieldInfo := range r.meta.Fields {
 		fieldVal := modelVal.Field(fieldInfo.Index)
 
@@ -49,7 +55,7 @@ func (r *BaseRepository[T, ID]) setFields(builder reflect.Value, modelVal reflec
 }
 
 // Create inserts a new model.
-func (r *BaseRepository[T, ID]) Create(ctx context.Context, model *T) error {
+func (r *BaseRepository[T, PT, ID]) Create(ctx context.Context, model *T) error {
 	val := reflect.ValueOf(model).Elem()
 	client := r.getEntityClient()
 
@@ -71,11 +77,12 @@ func (r *BaseRepository[T, ID]) Create(ctx context.Context, model *T) error {
 }
 
 // Update updates an existing model.
-func (r *BaseRepository[T, ID]) Update(ctx context.Context, model *T) error {
+func (r *BaseRepository[T, PT, ID]) Update(ctx context.Context, model *T) error {
 	val := reflect.ValueOf(model).Elem()
 	client := r.getEntityClient()
 
-	idValue := reflect.ValueOf((*model).GetID())
+	// Cast to PT to access GetID
+	idValue := reflect.ValueOf(PT(model).GetID())
 
 	updateMethod := client.Method(r.meta.MethodUpdate)
 	updateBuilder := updateMethod.Call([]reflect.Value{idValue})[0]
@@ -95,7 +102,7 @@ func (r *BaseRepository[T, ID]) Update(ctx context.Context, model *T) error {
 }
 
 // Delete removes a model by ID.
-func (r *BaseRepository[T, ID]) Delete(ctx context.Context, id ID) error {
+func (r *BaseRepository[T, PT, ID]) Delete(ctx context.Context, id ID) error {
 	client := r.getEntityClient()
 
 	deleteMethod := client.Method(r.meta.MethodDelete)
@@ -111,7 +118,7 @@ func (r *BaseRepository[T, ID]) Delete(ctx context.Context, id ID) error {
 }
 
 // Get retrieves a model by ID.
-func (r *BaseRepository[T, ID]) Get(ctx context.Context, id ID) (*T, error) {
+func (r *BaseRepository[T, PT, ID]) Get(ctx context.Context, id ID) (*T, error) {
 	client := r.getEntityClient()
 
 	getMethod := client.Method(r.meta.MethodGet)
@@ -126,7 +133,7 @@ func (r *BaseRepository[T, ID]) Get(ctx context.Context, id ID) (*T, error) {
 }
 
 // Find retrieves a paginated list of models.
-func (r *BaseRepository[T, ID]) Find(ctx context.Context, opts *dto.QueryOptions) (*dto.Paginated[*T], error) {
+func (r *BaseRepository[T, PT, ID]) Find(ctx context.Context, opts *dto.QueryOptions) (*dto.Paginated[*T], error) {
 	client := r.getEntityClient()
 
 	queryMethod := client.Method(r.meta.MethodQuery)
@@ -170,7 +177,7 @@ func IsNotFound(err error) bool {
 }
 
 // Exists checks if a model exists by ID.
-func (r *BaseRepository[T, ID]) Exists(ctx context.Context, id ID) (bool, error) {
+func (r *BaseRepository[T, PT, ID]) Exists(ctx context.Context, id ID) (bool, error) {
 	_, err := r.Get(ctx, id)
 	if err != nil {
 		if IsNotFound(err) {
@@ -182,7 +189,7 @@ func (r *BaseRepository[T, ID]) Exists(ctx context.Context, id ID) (bool, error)
 }
 
 // BatchCreate inserts multiple models.
-func (r *BaseRepository[T, ID]) BatchCreate(ctx context.Context, models []*T) error {
+func (r *BaseRepository[T, PT, ID]) BatchCreate(ctx context.Context, models []*T) error {
 	if len(models) == 0 {
 		return nil
 	}
@@ -233,7 +240,7 @@ func (r *BaseRepository[T, ID]) BatchCreate(ctx context.Context, models []*T) er
 }
 
 // BatchDelete removes multiple models by ID.
-func (r *BaseRepository[T, ID]) BatchDelete(ctx context.Context, ids []ID) error {
+func (r *BaseRepository[T, PT, ID]) BatchDelete(ctx context.Context, ids []ID) error {
 	for _, id := range ids {
 		if err := r.Delete(ctx, id); err != nil {
 			if IsNotFound(err) {

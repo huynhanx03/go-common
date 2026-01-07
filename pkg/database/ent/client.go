@@ -6,23 +6,38 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/huynhanx03/go-common/pkg/settings"
+
 	entsql "entgo.io/ent/dialect/sql"
 	_ "github.com/go-sql-driver/mysql"
-	_ "github.com/lib/pq"
 )
 
-// NewDriver creates a new Ent SQL driver and validates the connection.
-func NewDriver(cfg Config) (*entsql.Driver, error) {
-	// Validate driver
+// NewDriver creates a new Ent driver.
+func NewDriver(cfg settings.Database) (*entsql.Driver, error) {
+	var dsn string
 	switch cfg.Driver {
-	case DriverMySQL, DriverPostgres:
-		// Drivers are registered via import
+	case DriverMySQL:
+		dsn = fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=True",
+			cfg.Username,
+			cfg.Password,
+			cfg.Host,
+			cfg.Port,
+			cfg.Database,
+		)
+	case DriverPostgres:
+		dsn = fmt.Sprintf("host=%s port=%d user=%s dbname=%s password=%s sslmode=disable",
+			cfg.Host,
+			cfg.Port,
+			cfg.Username,
+			cfg.Database,
+			cfg.Password,
+		)
 	default:
 		return nil, fmt.Errorf("unsupported driver: %s", cfg.Driver)
 	}
 
 	// Open connection
-	db, err := sql.Open(cfg.Driver, cfg.DSN)
+	db, err := sql.Open(cfg.Driver, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database connection: %w", err)
 	}
@@ -30,7 +45,7 @@ func NewDriver(cfg Config) (*entsql.Driver, error) {
 	// Configure pool
 	db.SetMaxOpenConns(cfg.MaxOpenConns)
 	db.SetMaxIdleConns(cfg.MaxIdleConns)
-	db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
+	db.SetConnMaxLifetime(time.Duration(cfg.ConnMaxLifetime) * time.Second)
 
 	// Verify connection
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
