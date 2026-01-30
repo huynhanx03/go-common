@@ -1,5 +1,7 @@
 package settings
 
+import "crypto/rsa"
+
 type Config struct {
 	Server        Server        `mapstructure:"server"`
 	MongoDB       MongoDB       `mapstructure:"mongodb"`
@@ -7,7 +9,40 @@ type Config struct {
 	Redis         Redis         `mapstructure:"redis"`
 	Kafka         Kafka         `mapstructure:"kafka"`
 	Elasticsearch Elasticsearch `mapstructure:"elasticsearch"`
+	WideColumn    WideColumn    `mapstructure:"wide_column"`
 	Database      Database      `mapstructure:"database"`
+	SnowflakeNode SnowflakeNode `mapstructure:"snowflake_node"`
+	JWT           JWT           `mapstructure:"jwt"`
+	Services      Services      `mapstructure:"services"`
+}
+
+type Services struct {
+	IdentityService GRPCService `mapstructure:"identity_service"`
+	BillingService  GRPCService `mapstructure:"billing_service"`
+}
+
+type GRPCService struct {
+	Host string `mapstructure:"host"`
+	Port int    `mapstructure:"port"`
+}
+
+type JWT struct {
+	Secret         string          `mapstructure:"secret"`
+	PrivateKeyPath string          `mapstructure:"private_key_path"`
+	PublicKeyPath  string          `mapstructure:"public_key_path"`
+	PrivateKey     *rsa.PrivateKey `mapstructure:"-"`
+	PublicKey      *rsa.PublicKey  `mapstructure:"-"`
+}
+
+// WideColumn is the configuration for Wide Column databases (Cassandra/ScyllaDB)
+type WideColumn struct {
+	Hosts    []string `mapstructure:"hosts"`
+	Keyspace string   `mapstructure:"keyspace"`
+	Username string   `mapstructure:"username"`
+	Password string   `mapstructure:"password"`
+	Port     int      `mapstructure:"port"`
+	Timeout  int      `mapstructure:"timeout"`
+	Retries  int      `mapstructure:"retries"`
 }
 
 // Database is the configuration for the database
@@ -25,9 +60,10 @@ type Database struct {
 
 // Server is the configuration for the server
 type Server struct {
-	Mode string `mapstructure:"mode"`
-	Host string `mapstructure:"host"`
-	Port int    `mapstructure:"port"`
+	Mode     string `mapstructure:"mode"`
+	Host     string `mapstructure:"host"`
+	Port     int    `mapstructure:"port"`
+	GRPCPort int    `mapstructure:"grpc_port"`
 }
 
 // MongoDB is the configuration for MongoDB
@@ -55,19 +91,19 @@ type Logger struct {
 
 // Redis is the configuration for Redis
 type Redis struct {
-	Host            string `mapstructure:"host"`
-	Password        string `mapstructure:"password"`
-	Port            int    `mapstructure:"port"`
-	Database        int    `mapstructure:"database"`
-	PoolSize        int    `mapstructure:"pool_size"`
-	MinIdleConns    int    `mapstructure:"min_idle_conns"`
-	PoolTimeout     int    `mapstructure:"pool_timeout"`
-	DialTimeout     int    `mapstructure:"dial_timeout"`
-	ReadTimeout     int    `mapstructure:"read_timeout"`
-	WriteTimeout    int    `mapstructure:"write_timeout"`
-	MaxRetries      int    `mapstructure:"max_retries"`
-	MaxRetryBackoff int    `mapstructure:"max_retry_backoff"`
-	MinRetryBackoff int    `mapstructure:"min_retry_backoff"`
+	Addrs           []string `mapstructure:"addrs"`
+	MasterName      string   `mapstructure:"master_name"`
+	Password        string   `mapstructure:"password"`
+	Database        int      `mapstructure:"database"`
+	PoolSize        int      `mapstructure:"pool_size"`
+	MinIdleConns    int      `mapstructure:"min_idle_conns"`
+	PoolTimeout     int      `mapstructure:"pool_timeout"`
+	DialTimeout     int      `mapstructure:"dial_timeout"`
+	ReadTimeout     int      `mapstructure:"read_timeout"`
+	WriteTimeout    int      `mapstructure:"write_timeout"`
+	MaxRetries      int      `mapstructure:"max_retries"`
+	MaxRetryBackoff int      `mapstructure:"max_retry_backoff"`
+	MinRetryBackoff int      `mapstructure:"min_retry_backoff"`
 }
 
 // Kafka is the configuration for Kafka
@@ -89,4 +125,16 @@ type Elasticsearch struct {
 	Addresses []string `mapstructure:"addresses"`
 	Username  string   `mapstructure:"username"`
 	Password  string   `mapstructure:"password"`
+}
+
+type Snowflake struct {
+	Epoch     int64 `mapstructure:"epoch"`
+	Node      uint8 `mapstructure:"node"`
+	Step      uint8 `mapstructure:"step"`
+	TotalBits uint8 `mapstructure:"total_bits"`
+}
+
+type SnowflakeNode struct {
+	Config   Snowflake
+	WorkerID int64 `mapstructure:"worker_id"`
 }

@@ -15,6 +15,7 @@ const (
 	CodeValidationFailed = 40001 // Validation failed
 	CodeBadRequest       = 40002 // Bad request
 	CodeInvalidID        = 40003 // Invalid ID format
+	CodeInternalError    = 40004 // Internal error
 
 	// Authentication/Authorization errors (41000-41999)
 	CodeUnauthorized    = 41000 // Unauthorized
@@ -45,14 +46,14 @@ func GetHTTPCode(code int) int {
 		return http.StatusOK // 200
 	case CodeCreated:
 		return http.StatusCreated // 201
-	case CodeParamInvalid, CodeBadRequest, CodeInvalidID:
+	case CodeParamInvalid, CodeBadRequest, CodeInvalidID, CodeInternalError:
 		return http.StatusBadRequest // 400
 	case CodeUnauthorized, CodeInvalidToken, CodeTokenExpired, CodeInvalidPassword:
 		return http.StatusUnauthorized // 401
 	case CodeForbidden, CodeAccountNotFound:
 		// AccountNotFound can be 404, but often for auth it's 401/403 or 404.
-		// Let's stick to NotFound for AccountNotFound if it's resource lookup, 
-		// or Unauthorized if login. 
+		// Let's stick to NotFound for AccountNotFound if it's resource lookup,
+		// or Unauthorized if login.
 		// Assuming CodeAccountNotFound is resource:
 		if code == CodeAccountNotFound {
 			return http.StatusNotFound

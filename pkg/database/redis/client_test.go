@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
-	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -36,12 +34,8 @@ func TestClient_Integration(t *testing.T) {
 	}
 	defer terminate()
 
-	host, portStr, _ := strings.Cut(uri, ":")
-	port, _ := strconv.Atoi(portStr)
-
 	cfg := &settings.Redis{
-		Host:            host,
-		Port:            port,
+		Addrs:           []string{uri},
 		Password:        "",
 		Database:        0,
 		PoolSize:        10,

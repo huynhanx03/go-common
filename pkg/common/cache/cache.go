@@ -5,38 +5,27 @@ import (
 	"time"
 )
 
-// CacheEngine defines the standard interface for caching operations
+// LocalCache defines the interface for in-memory local cache operations.
+type LocalCache[K comparable, V any] interface {
+	Get(key K) (V, bool)
+	Set(key K, value V, cost int64) bool
+	Delete(key K)
+	Clear()
+	Close()
+}
+
+// CacheEngine defines the standard interface for remote caching operations.
 type CacheEngine interface {
-	// Get retrieves a value by key.
 	Get(ctx context.Context, key string) ([]byte, bool, error)
-
-	// Set stores a value with an optional TTL.
-	// value can be any serializable type.
 	Set(ctx context.Context, key string, value any, ttl time.Duration) error
-
-	// Delete removes a key from the cache.
 	Delete(ctx context.Context, key string) error
-
-	// InvalidatePrefix removes all keys matching a prefix.
-	// Useful for clearing group caches.
 	InvalidatePrefix(ctx context.Context, prefix string) error
-
-	// BatchSet stores multiple values in a pipeline.
-	// values is a map of key -> value.
 	BatchSet(ctx context.Context, values map[string]any, ttl time.Duration) error
-
-	// BatchDelete removes multiple keys from the cache.
-	BatchDelete(ctx context.Context, keys []string) error
-
-	// GeoAdd adds geospatial locations.
+	DeleteBulk(ctx context.Context, keys []string) error
+	Incr(ctx context.Context, key string) (int64, error)
+	Decr(ctx context.Context, key string) (int64, error)
 	GeoAdd(ctx context.Context, key string, locations ...*GeoLocation) error
-
-	// GeoRemove removes members from a geospatial index.
 	GeoRemove(ctx context.Context, key string, members ...string) error
-
-	// GeoRadius searches for members within a radius.
 	GeoRadius(ctx context.Context, key string, longitude, latitude, radius float64, unit string) ([]*GeoLocation, error)
-
-	// Close closes the connection to the cache server.
 	Close()
 }

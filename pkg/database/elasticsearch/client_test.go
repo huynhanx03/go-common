@@ -72,12 +72,12 @@ func TestClient_Integration(t *testing.T) {
 		testExists(t, ctx, repo)
 	})
 
-	t.Run("BatchCreate", func(t *testing.T) {
-		testBatchCreate(t, ctx, repo)
+	t.Run("CreateBulk", func(t *testing.T) {
+		testCreateBulk(t, ctx, repo)
 	})
 
-	t.Run("BatchDelete", func(t *testing.T) {
-		testBatchDelete(t, ctx, repo)
+	t.Run("DeleteBulk", func(t *testing.T) {
+		testDeleteBulk(t, ctx, repo)
 	})
 
 	t.Run("Find", func(t *testing.T) {
@@ -162,16 +162,16 @@ func testExists(t *testing.T, ctx context.Context, repo *BaseRepository[TestDocu
 	}
 }
 
-func testBatchCreate(t *testing.T, ctx context.Context, repo *BaseRepository[TestDocument, string]) {
+func testCreateBulk(t *testing.T, ctx context.Context, repo *BaseRepository[TestDocument, string]) {
 	bm1 := NewBaseModel[string]("6")
 	doc1 := &TestDocument{BaseModel: &bm1, Title: "batch-1", Value: 600}
 	bm2 := NewBaseModel[string]("7")
 	doc2 := &TestDocument{BaseModel: &bm2, Title: "batch-2", Value: 700}
 
-	// repo.BatchCreate takes []*T. T=TestDocument. So []*(TestDocument).
+	// repo.CreateBulk takes []*T. T=TestDocument. So []*(TestDocument).
 	docs := []*TestDocument{doc1, doc2}
 
-	if err := repo.BatchCreate(ctx, docs); err != nil {
+	if err := repo.CreateBulk(ctx, docs); err != nil {
 		t.Fatalf("Failed to batch create: %v", err)
 	}
 
@@ -182,7 +182,7 @@ func testBatchCreate(t *testing.T, ctx context.Context, repo *BaseRepository[Tes
 	}
 }
 
-func testBatchDelete(t *testing.T, ctx context.Context, repo *BaseRepository[TestDocument, string]) {
+func testDeleteBulk(t *testing.T, ctx context.Context, repo *BaseRepository[TestDocument, string]) {
 	bm1 := NewBaseModel[string]("8")
 	doc1 := &TestDocument{BaseModel: &bm1, Title: "batch-del-1", Value: 800}
 	bm2 := NewBaseModel[string]("9")
@@ -190,7 +190,7 @@ func testBatchDelete(t *testing.T, ctx context.Context, repo *BaseRepository[Tes
 	repo.Create(ctx, doc1)
 	repo.Create(ctx, doc2)
 
-	if err := repo.BatchDelete(ctx, []string{"8", "9"}); err != nil {
+	if err := repo.DeleteBulk(ctx, []string{"8", "9"}); err != nil {
 		t.Fatalf("Failed to batch delete: %v", err)
 	}
 
@@ -213,7 +213,7 @@ func testFind(t *testing.T, ctx context.Context, repo *BaseRepository[TestDocume
 	doc3 := &TestDocument{BaseModel: &bm3, Title: "other-one", Value: 1200}
 
 	docs := []*TestDocument{doc1, doc2, doc3}
-	repo.BatchCreate(ctx, docs)
+	repo.CreateBulk(ctx, docs)
 	time.Sleep(1 * time.Second) // Ensure index refresh
 
 	opts := &dto.QueryOptions{

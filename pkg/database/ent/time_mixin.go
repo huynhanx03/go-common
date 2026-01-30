@@ -8,13 +8,13 @@ import (
 	"entgo.io/ent/schema/mixin"
 )
 
-// BaseMixin defines the common fields for all schemas.
-type BaseMixin struct {
+// TimeMixin defines the common time fields (created_at, updated_at) for schemas.
+type TimeMixin struct {
 	mixin.Schema
 }
 
-// Fields of the BaseMixin.
-func (BaseMixin) Fields() []ent.Field {
+// Fields of the TimeMixin.
+func (TimeMixin) Fields() []ent.Field {
 	return []ent.Field{
 		field.Time("created_at").
 			Default(time.Now).

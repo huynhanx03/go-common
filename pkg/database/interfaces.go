@@ -16,6 +16,6 @@ type Repository[T any, ID any] interface {
 
 	Exists(ctx context.Context, id ID) (bool, error)
 
-	BatchCreate(ctx context.Context, models []*T) error
-	BatchDelete(ctx context.Context, ids []ID) error
+	CreateBulk(ctx context.Context, models []*T) error
+	DeleteBulk(ctx context.Context, ids []ID) error
 }

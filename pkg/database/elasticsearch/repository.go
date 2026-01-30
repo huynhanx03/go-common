@@ -191,8 +191,8 @@ func (r *BaseRepository[T, ID]) Find(ctx context.Context, opts *dto.QueryOptions
 	}, nil
 }
 
-// BatchCreate inserts multiple documents using Bulk API
-func (r *BaseRepository[T, ID]) BatchCreate(ctx context.Context, docs []*T) error {
+// CreateBulk inserts multiple documents using Bulk API
+func (r *BaseRepository[T, ID]) CreateBulk(ctx context.Context, docs []*T) error {
 	if len(docs) == 0 {
 		return nil
 	}
@@ -225,8 +225,8 @@ func (r *BaseRepository[T, ID]) BatchCreate(ctx context.Context, docs []*T) erro
 	return nil
 }
 
-// BatchDelete deletes multiple documents using Bulk API
-func (r *BaseRepository[T, ID]) BatchDelete(ctx context.Context, docIDs []ID) error {
+// DeleteBulk deletes multiple documents using Bulk API
+func (r *BaseRepository[T, ID]) DeleteBulk(ctx context.Context, docIDs []ID) error {
 	if len(docIDs) == 0 {
 		return nil
 	}
