@@ -4,6 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"sync"
+
+	"github.com/huynhanx03/go-common/pkg/common/locks"
+	"github.com/huynhanx03/go-common/pkg/hash"
 )
 
 const (
@@ -18,6 +22,7 @@ type Bloom struct {
 	bitset []uint64
 	k      uint64 // Number of hash functions
 	m      uint64 // Size of bitset in bits
+	lock   sync.Locker
 }
 
 // New creates a new Bloom filter.
@@ -43,11 +48,15 @@ func New(capacity uint64, fpRate float64) (*Bloom, error) {
 		bitset: make([]uint64, (m+63)/64),
 		k:      k,
 		m:      m,
+		lock:   locks.NewSpinLock(),
 	}, nil
 }
 
 // Add adds a hashed key to the bloom filter.
 func (b *Bloom) Add(hash uint64) {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
 	h := hash
 	delta := (h >> 17) | (h << 47) // Rotate to get a different mix
 	for i := uint64(0); i < b.k; i++ {
@@ -56,9 +65,18 @@ func (b *Bloom) Add(hash uint64) {
 	}
 }
 
+// AddString adds a string key to the bloom filter.
+func (b *Bloom) AddString(key string) {
+	_, h := hash.KeyToHash(key)
+	b.Add(h)
+}
+
 // AddIfNotHas checks if the key exists and adds it if not.
 // Returns true if the key was already present, false otherwise.
 func (b *Bloom) AddIfNotHas(hash uint64) bool {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
 	h := hash
 	delta := (h >> 17) | (h << 47)
 	present := true
@@ -77,6 +95,9 @@ func (b *Bloom) AddIfNotHas(hash uint64) bool {
 
 // Has checks if the hash is present in the bloom filter.
 func (b *Bloom) Has(hash uint64) bool {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
 	h := hash
 	delta := (h >> 17) | (h << 47)
 	for i := uint64(0); i < b.k; i++ {
@@ -86,6 +107,12 @@ func (b *Bloom) Has(hash uint64) bool {
 		}
 	}
 	return true
+}
+
+// HasString checks if the string key is present in the bloom filter.
+func (b *Bloom) HasString(key string) bool {
+	_, h := hash.KeyToHash(key)
+	return b.Has(h)
 }
 
 // Clear resets the Bloom filter.
@@ -120,6 +147,7 @@ func (b *Bloom) UnmarshalJSON(data []byte) error {
 	b.bitset = temp.Bitset
 	b.k = temp.K
 	b.m = temp.M
+	b.lock = locks.NewSpinLock()
 	return nil
 }
 

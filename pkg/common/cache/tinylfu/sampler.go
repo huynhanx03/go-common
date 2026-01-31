@@ -1,9 +1,5 @@
 package tinylfu
 
-import (
-	"math/rand"
-)
-
 const (
 	sampleSize = 5
 )
@@ -46,14 +42,11 @@ func (s *Sampler) Sample() []*costEntry {
 	}
 
 	buf := make([]*costEntry, 0, sampleSize)
-	i := 0
 	for key, cost := range s.costs {
-		if i < sampleSize {
-			buf = append(buf, &costEntry{key: key, cost: cost})
-		} else if rand.Intn(i+1) < sampleSize {
-			buf[rand.Intn(sampleSize)] = &costEntry{key: key, cost: cost}
+		buf = append(buf, &costEntry{key: key, cost: cost})
+		if len(buf) >= sampleSize {
+			break
 		}
-		i++
 	}
 	return buf
 }
