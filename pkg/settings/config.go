@@ -49,7 +49,8 @@ type Database struct {
 	Database        string `mapstructure:"database"`
 	MaxOpenConns    int    `mapstructure:"max_open_conns"`
 	MaxIdleConns    int    `mapstructure:"max_idle_conns"`
-	ConnMaxLifetime int    `mapstructure:"conn_max_lifetime"`
+	ConnMaxLifetime int    `mapstructure:"conn_max_lifetime"`  // seconds; keep below the server/proxy idle timeout
+	ConnMaxIdleTime int    `mapstructure:"conn_max_idle_time"` // seconds; shrinks the pool when traffic is quiet
 }
 
 // Server is the configuration for the server
