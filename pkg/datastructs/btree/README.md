@@ -31,31 +31,27 @@ Nodes are laid out in memory to maximize CPU cache usage:
 ## Usage
 
 ```go
-import "github.com/huynhanx03/go-common/pkg/datastructs/btree"
+// Create a new BTree
+tree := btree.NewTree()
+defer tree.Close() // Release memory back to pool
 
-func main() {
-    // Create a new BTree
-    tree := btree.NewTree()
-    defer tree.Close() // Release memory back to pool
+// Set Key-Value
+tree.Set(100, 500)
+tree.Set(200, 600)
 
-    // Set Key-Value
-    tree.Set(100, 500)
-    tree.Set(200, 600)
+// Get Value
+val := tree.Get(100)
+// val == 500
 
-    // Get Value
-    val := tree.Get(100)
-    // val == 500
+// Iterate
+tree.IterateKV(func(k, v uint64) uint64 {
+    fmt.Printf("Key: %d, Val: %d\n", k, v)
+    return 0 // Return 0 to keep value unchanged
+})
 
-    // Iterate
-    tree.IterateKV(func(k, v uint64) uint64 {
-        fmt.Printf("Key: %d, Val: %d\n", k, v)
-        return 0 // Return 0 to keep value unchanged
-    })
-
-    // Efficiently delete old data
-    // Removes all keys where value < 550
-    tree.DeleteBelow(550) 
-}
+// Efficiently delete old data
+// Removes all keys where value < 550
+tree.DeleteBelow(550) 
 ```
 
 ## Performance & Trade-offs

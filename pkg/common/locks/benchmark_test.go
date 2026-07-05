@@ -7,13 +7,6 @@ import (
 	"testing"
 )
 
-/*
-Benchmark result for three types of locks:
-	BenchmarkMutex-10              	10452573	        111.1 ns/op	       0 B/op	       0 allocs/op
-	BenchmarkSpinLock-10           	58953211	        18.01 ns/op	       0 B/op	       0 allocs/op
-	BenchmarkBackOffSpinLock-10    	100000000	        10.81 ns/op	       0 B/op	       0 allocs/op
-*/
-
 type originSpinLock uint32
 
 func (sl *originSpinLock) Lock() {
@@ -24,10 +17,6 @@ func (sl *originSpinLock) Lock() {
 
 func (sl *originSpinLock) Unlock() {
 	atomic.StoreUint32((*uint32)(sl), 0)
-}
-
-func NewOriginSpinLock() sync.Locker {
-	return new(originSpinLock)
 }
 
 func BenchmarkMutex(b *testing.B) {
@@ -41,8 +30,8 @@ func BenchmarkMutex(b *testing.B) {
 	})
 }
 
-func BenchmarkSpinLock(b *testing.B) {
-	spin := NewOriginSpinLock()
+func BenchmarkGoschedSpinLock(b *testing.B) {
+	spin := new(originSpinLock)
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			spin.Lock()
@@ -52,7 +41,7 @@ func BenchmarkSpinLock(b *testing.B) {
 	})
 }
 
-func BenchmarkBackOffSpinLock(b *testing.B) {
+func BenchmarkHybridSpinLock(b *testing.B) {
 	spin := NewSpinLock()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {

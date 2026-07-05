@@ -1,51 +1,60 @@
 package workerpool
 
-import "math"
+import (
+	"github.com/panjf2000/ants/v2"
+)
 
-// MultiPool consists of multiple pools, from which you will benefit the
-// performance improvement on basis of the fine-grained locking that reduces
-// the lock contention.
+// LoadBalancingStrategy picks which sub-pool of a multi-pool receives the next task.
+type LoadBalancingStrategy = ants.LoadBalancingStrategy
+
+const (
+	// RoundRobin distributes tasks to sub-pools in rotation.
+	RoundRobin = ants.RoundRobin
+
+	// LeastTasks always picks the sub-pool with the fewest pending tasks.
+	LeastTasks = ants.LeastTasks
+)
+
+// MultiPool consists of multiple sub-pools, reducing contention on a single
+// pool's lock for high-throughput workloads.
 type MultiPool struct {
-	*multiPoolCommon[*Pool]
+	*ants.MultiPool
 }
 
-// NewMultiPool instantiates a MultiPool with a size of the pool list and a size
-// per pool, and the load-balancing strategy.
+// NewMultiPool creates a multi-pool with size sub-pools of sizePerPool workers each.
 func NewMultiPool(size, sizePerPool int, lbs LoadBalancingStrategy, options ...Option) (*MultiPool, error) {
-	if size <= 0 {
-		return nil, ErrInvalidPoolSize
+	p, err := ants.NewMultiPool(size, sizePerPool, lbs, loadOptions(options...)...)
+	if err != nil {
+		return nil, err
 	}
-
-	if lbs != RoundRobin && lbs != LeastTasks {
-		return nil, ErrInvalidLoadBalancingStrategy
-	}
-
-	pools := make([]*Pool, size)
-	for i := 0; i < size; i++ {
-		pool, err := NewPool(sizePerPool, options...)
-		if err != nil {
-			return nil, err
-		}
-		pools[i] = pool
-	}
-	return &MultiPool{
-		multiPoolCommon: &multiPoolCommon[*Pool]{
-			pools: pools,
-			index: math.MaxUint32,
-			lbs:   lbs,
-		},
-	}, nil
+	return &MultiPool{MultiPool: p}, nil
 }
 
-func (mp *MultiPool) Submit(task func()) (err error) {
-	if mp.IsClosed() {
-		return ErrPoolClosed
+// MultiPoolFunc is a MultiPool bound to a fixed function taking an untyped
+// argument. Prefer GenericMultiPool when the argument type is known.
+type MultiPoolFunc struct {
+	*ants.MultiPoolWithFunc
+}
+
+// NewMultiPoolFunc creates a multi-pool bound to fn.
+func NewMultiPoolFunc(size, sizePerPool int, fn func(any), lbs LoadBalancingStrategy, options ...Option) (*MultiPoolFunc, error) {
+	p, err := ants.NewMultiPoolWithFunc(size, sizePerPool, fn, lbs, loadOptions(options...)...)
+	if err != nil {
+		return nil, err
 	}
-	if err = mp.pools[mp.next(mp.lbs)].Submit(task); err == nil {
-		return
+	return &MultiPoolFunc{MultiPoolWithFunc: p}, nil
+}
+
+// GenericMultiPool is a MultiPool bound to a typed function.
+type GenericMultiPool[T any] struct {
+	*ants.MultiPoolWithFuncGeneric[T]
+}
+
+// NewGenericMultiPool creates a multi-pool bound to a typed function.
+func NewGenericMultiPool[T any](size, sizePerPool int, fn func(T), lbs LoadBalancingStrategy, options ...Option) (*GenericMultiPool[T], error) {
+	p, err := ants.NewMultiPoolWithFuncGeneric(size, sizePerPool, fn, lbs, loadOptions(options...)...)
+	if err != nil {
+		return nil, err
 	}
-	if err == ErrPoolOverload && mp.lbs == RoundRobin {
-		return mp.pools[mp.next(LeastTasks)].Submit(task)
-	}
-	return
+	return &GenericMultiPool[T]{MultiPoolWithFuncGeneric: p}, nil
 }

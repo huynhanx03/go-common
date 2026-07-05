@@ -2,52 +2,40 @@ package kafka
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/IBM/sarama"
+
+	"github.com/huynhanx03/go-common/pkg/cid"
+	"github.com/huynhanx03/go-common/pkg/encoding/json"
 )
 
-// buildContext creates a context from the message headers
+// buildContext creates a context from the message headers, restoring the
+// correlation ID stamped by the producer so consumer logs correlate with the
+// request that published the message. Messages without one get a fresh cid.
 func buildContext(headers []*sarama.RecordHeader) context.Context {
 	ctx := context.Background()
 
 	for _, h := range headers {
-		key := string(h.Key)
-		val := string(h.Value)
-
-		switch key {
-		case HeaderRequestID:
-			ctx = context.WithValue(ctx, ContextKeyRequestID, val)
-		case HeaderTraceID:
-			ctx = context.WithValue(ctx, ContextKeyTraceID, val)
+		if string(h.Key) == cid.Header {
+			ctx = cid.WithContext(ctx, string(h.Value))
+			break
 		}
 	}
 
-	return ctx
+	return cid.EnsureContext(ctx)
 }
 
-// buildHeaders extracts values from context and creates Kafka headers
+// buildHeaders carries the context's correlation ID into Kafka record headers.
 func buildHeaders(ctx context.Context) []sarama.RecordHeader {
-	var headers []sarama.RecordHeader
-
-	// 1. Get RequestID
-	if val, ok := ctx.Value(ContextKeyRequestID).(string); ok && val != "" {
-		headers = append(headers, sarama.RecordHeader{
-			Key:   []byte(HeaderRequestID),
-			Value: []byte(val),
-		})
+	id := cid.FromContext(ctx)
+	if id == "" {
+		return nil
 	}
-
-	// 2. Get TraceID
-	if val, ok := ctx.Value(ContextKeyTraceID).(string); ok && val != "" {
-		headers = append(headers, sarama.RecordHeader{
-			Key:   []byte(HeaderTraceID),
-			Value: []byte(val),
-		})
-	}
-
-	return headers
+	return []sarama.RecordHeader{{
+		Key:   []byte(cid.Header),
+		Value: []byte(id),
+	}}
 }
 
 // PublishJSON serializes data to JSON and publishes it to the specified topic.

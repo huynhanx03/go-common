@@ -1,35 +1,36 @@
 package workerpool
 
-import "errors"
+import (
+	"github.com/panjf2000/ants/v2"
+)
 
+// Errors re-exported so callers can match with errors.Is against the
+// workerpool package without importing ants.
 var (
+	// ErrLackPoolFunc will be returned when invokers don't provide function for pool.
+	ErrLackPoolFunc = ants.ErrLackPoolFunc
+
+	// ErrInvalidPoolExpiry will be returned when setting a negative number as the periodic duration to purge goroutines.
+	ErrInvalidPoolExpiry = ants.ErrInvalidPoolExpiry
+
 	// ErrPoolClosed will be returned when submitting task to a closed pool.
-	ErrPoolClosed = errors.New("this pool has been closed")
+	ErrPoolClosed = ants.ErrPoolClosed
 
 	// ErrPoolOverload will be returned when the pool is full and no workers available.
-	ErrPoolOverload = errors.New("too many goroutines blocked on submit or nonblocking pool is full")
-
-	// ErrLackPoolFunc will be returned when the generic pool function is nil.
-	ErrLackPoolFunc = errors.New("must provide function for pool")
-
-	// ErrInvalidMultiPoolSize will be returned when the size of multi-pool is invalid.
-	ErrInvalidMultiPoolSize = errors.New("invalid multi-pool size")
-
-	// ErrInvalidLoadBalancingStrategy will be returned when the load-balancing strategy is invalid.
-	ErrInvalidLoadBalancingStrategy = errors.New("invalid load-balancing strategy")
-
-	// ErrInvalidPoolIndex will be returned when the pool index is invalid.
-	ErrInvalidPoolIndex = errors.New("invalid pool index")
-
-	// ErrQueueIsFull will be returned when the worker queue is full.
-	ErrQueueIsFull = errors.New("the queue is full")
+	ErrPoolOverload = ants.ErrPoolOverload
 
 	// ErrInvalidPreAllocSize will be returned when trying to set up a negative capacity under PreAlloc mode.
-	ErrInvalidPreAllocSize = errors.New("can not set up a negative capacity under PreAlloc mode")
+	ErrInvalidPreAllocSize = ants.ErrInvalidPreAllocSize
 
 	// ErrTimeout will be returned after the operations timed out.
-	ErrTimeout = errors.New("operation timed out")
+	ErrTimeout = ants.ErrTimeout
 
-	// ErrInvalidPoolSize will be returned when the pool size is <= 0.
-	ErrInvalidPoolSize = errors.New("size must be greater than 0")
+	// ErrInvalidPoolIndex will be returned when trying to retrieve a pool with an invalid index from a multi-pool.
+	ErrInvalidPoolIndex = ants.ErrInvalidPoolIndex
+
+	// ErrInvalidLoadBalancingStrategy will be returned when creating a multi-pool with an unknown strategy.
+	ErrInvalidLoadBalancingStrategy = ants.ErrInvalidLoadBalancingStrategy
+
+	// ErrInvalidMultiPoolSize will be returned when creating a multi-pool with a non-positive size.
+	ErrInvalidMultiPoolSize = ants.ErrInvalidMultiPoolSize
 )

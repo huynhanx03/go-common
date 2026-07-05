@@ -4,12 +4,32 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"strings"
 
 	"github.com/huynhanx03/go-common/pkg/common/apperr"
 	"github.com/huynhanx03/go-common/pkg/common/http/response"
 )
+
+// ErrorPredicates lets an application register recognizers for its generated
+// Ent error types (e.g. generate.IsNotFound), since each Ent codebase generates
+// its own error types that this shared package cannot import.
+type ErrorPredicates struct {
+	IsNotFound        func(error) bool
+	IsValidationError func(error) bool
+	IsConstraintError func(error) bool
+	IsNotLoaded       func(error) bool
+	IsNotSingular     func(error) bool
+}
+
+// registered holds application-provided predicates. Register at startup,
+// before serving traffic — reads are not synchronized.
+var registered []ErrorPredicates
+
+// RegisterErrorPredicates registers generated-Ent error recognizers.
+// Call once at application startup.
+func RegisterErrorPredicates(p ErrorPredicates) {
+	registered = append(registered, p)
+}
 
 // NotFoundError returns when trying to fetch a specific entity and it was not found in the database.
 type NotFoundError struct {
@@ -120,106 +140,115 @@ func IsNotSingular(err error) bool {
 	return errors.As(err, &e)
 }
 
+// isNotFound checks both custom and registered generated Ent NotFoundError.
+func isNotFound(err error) bool {
+	if IsNotFound(err) {
+		return true
+	}
+	for _, p := range registered {
+		if p.IsNotFound != nil && p.IsNotFound(err) {
+			return true
+		}
+	}
+	return false
+}
+
+// isValidationError checks both custom and registered generated Ent ValidationError.
+func isValidationError(err error) bool {
+	if IsValidationError(err) {
+		return true
+	}
+	for _, p := range registered {
+		if p.IsValidationError != nil && p.IsValidationError(err) {
+			return true
+		}
+	}
+	return false
+}
+
+// isConstraintError checks both custom and registered generated Ent ConstraintError.
+func isConstraintError(err error) bool {
+	if IsConstraintError(err) {
+		return true
+	}
+	for _, p := range registered {
+		if p.IsConstraintError != nil && p.IsConstraintError(err) {
+			return true
+		}
+	}
+	return false
+}
+
+// isNotLoaded checks both custom and registered generated Ent NotLoadedError.
+func isNotLoaded(err error) bool {
+	if IsNotLoaded(err) {
+		return true
+	}
+	for _, p := range registered {
+		if p.IsNotLoaded != nil && p.IsNotLoaded(err) {
+			return true
+		}
+	}
+	return false
+}
+
+// isNotSingular checks both custom and registered generated Ent NotSingularError.
+func isNotSingular(err error) bool {
+	if IsNotSingular(err) {
+		return true
+	}
+	for _, p := range registered {
+		if p.IsNotSingular != nil && p.IsNotSingular(err) {
+			return true
+		}
+	}
+	return false
+}
+
 // MapEntError maps Ent errors to apperr.AppError
 func MapEntError(err error, messagePrefix string) *apperr.AppError {
 	if err == nil {
 		return nil
 	}
 
-	if IsNotFound(err) {
-		return apperr.New(
-			response.CodeNotFound,
-			fmt.Sprintf("%s not found", messagePrefix),
-			http.StatusNotFound,
-			err,
-		)
+	if isNotFound(err) {
+		return apperr.New(response.CodeNotFound, fmt.Sprintf("%s not found", messagePrefix), err)
 	}
 
-	if IsValidationError(err) {
-		return apperr.New(
-			response.CodeValidationFailed,
-			fmt.Sprintf("%s validation failed", messagePrefix),
-			http.StatusUnprocessableEntity,
-			err,
-		)
+	if isValidationError(err) {
+		return apperr.New(response.CodeValidationFailed, fmt.Sprintf("%s validation failed", messagePrefix), err)
 	}
 
-	if IsConstraintError(err) {
+	if isConstraintError(err) {
 		errStr := strings.ToLower(err.Error())
 
 		switch {
-		// Duplicate entry
-		case strings.Contains(errStr, "duplicate") || strings.Contains(errStr, "unique constraint"):
-			return apperr.New(
-				response.CodeConflict,
-				fmt.Sprintf("%s already exists", messagePrefix),
-				http.StatusConflict,
-				err,
-			)
+		case strings.Contains(errStr, "duplicate") || strings.Contains(errStr, "unique"):
+			return apperr.New(response.CodeConflict, fmt.Sprintf("%s already exists", messagePrefix), err)
 
-		// Foreign Key Constraint
-		case strings.Contains(errStr, "foreign key") || strings.Contains(errStr, "constraint"):
+		case strings.Contains(errStr, "foreign key"):
 			if strings.Contains(errStr, "delete") || strings.Contains(errStr, "update") {
-				return apperr.New(
-					response.CodeConflict,
-					fmt.Sprintf("%s cannot be modified because it is referenced by other records", messagePrefix),
-					http.StatusConflict,
-					err,
-				)
+				return apperr.New(response.CodeConflict, fmt.Sprintf("%s cannot be modified because it is referenced by other records", messagePrefix), err)
 			}
-			// Invalid reference (e.g. creating with invalid FK)
-			return apperr.New(
-				response.CodeBadRequest,
-				fmt.Sprintf("%s contains invalid reference data", messagePrefix),
-				http.StatusBadRequest,
-				err,
-			)
+			return apperr.New(response.CodeBadRequest, fmt.Sprintf("%s contains invalid reference data", messagePrefix), err)
 
-		// Deadlock
 		case strings.Contains(errStr, "deadlock"):
 			slog.Error("Database deadlock occurred", "error", err)
-			return apperr.New(
-				response.CodeDatabaseError,
-				"Operation temporarily unavailable, please try again",
-				http.StatusServiceUnavailable,
-				err,
-			)
+			return apperr.New(response.CodeDatabaseError, "Operation temporarily unavailable, please try again", err)
 		}
 
-		// Fallback for generic constraint error
-		return apperr.New(
-			response.CodeConflict,
-			fmt.Sprintf("%s constraint failed", messagePrefix),
-			http.StatusConflict,
-			err,
-		)
+		return apperr.New(response.CodeConflict, fmt.Sprintf("%s constraint failed", messagePrefix), err)
 	}
 
-	if IsNotLoaded(err) {
+	if isNotLoaded(err) {
 		slog.Error("Server logic error: edge was not loaded before access", "error", err)
-		return apperr.New(
-			response.CodeInternalServer,
-			"Internal server error",
-			http.StatusInternalServerError,
-			err,
-		)
+		return apperr.New(response.CodeInternalServer, "Internal server error", err)
 	}
 
-	if IsNotSingular(err) {
-		return apperr.New(
-			response.CodeInternalError,
-			fmt.Sprintf("%s is not uniquely identifiable", messagePrefix),
-			http.StatusBadRequest,
-			err,
-		)
+	if isNotSingular(err) {
+		return apperr.New(response.CodeInternalError, fmt.Sprintf("%s is not uniquely identifiable", messagePrefix), err)
 	}
 
-	// Default: Generic Database Error
 	slog.Error("Unexpected database error", "error", err)
-	return apperr.New(
-		response.CodeDatabaseError,
-		"An unexpected database error occurred",
-		http.StatusInternalServerError,
-		err,
-	)
+	return apperr.New(response.CodeDatabaseError, "An unexpected database error occurred", err)
 }

@@ -17,12 +17,15 @@ func ParseRequest[T any](c *gin.Context) (*T, error) {
 	// Try to bind URI params (optional, ignore error if no tags)
 	_ = c.ShouldBindUri(&req)
 
+	// Try to bind query params before JSON. JSON can still override values for POST handlers.
+	_ = c.ShouldBindQuery(&req)
+
 	if err := c.ShouldBindJSON(&req); err != nil && err != io.EOF {
-		return nil, apperr.New(response.CodeParamInvalid, err.Error(), 0, err)
+		return nil, apperr.New(response.CodeParamInvalid, err.Error(), err)
 	}
 
 	if ok, msg := validation.IsRequestValid(req); !ok {
-		return nil, apperr.New(response.CodeValidationFailed, string(msg), 0, nil)
+		return nil, apperr.New(response.CodeValidationFailed, string(msg), nil)
 	}
 
 	return &req, nil

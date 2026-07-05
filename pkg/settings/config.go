@@ -3,17 +3,11 @@ package settings
 import "crypto/rsa"
 
 type Config struct {
-	Server        Server        `mapstructure:"server"`
-	MongoDB       MongoDB       `mapstructure:"mongodb"`
-	Logger        Logger        `mapstructure:"logger"`
-	Redis         Redis         `mapstructure:"redis"`
-	Kafka         Kafka         `mapstructure:"kafka"`
-	Elasticsearch Elasticsearch `mapstructure:"elasticsearch"`
-	WideColumn    WideColumn    `mapstructure:"wide_column"`
-	Database      Database      `mapstructure:"database"`
-	SnowflakeNode SnowflakeNode `mapstructure:"snowflake_node"`
-	JWT           JWT           `mapstructure:"jwt"`
-	Services      Services      `mapstructure:"services"`
+	Server   Server   `mapstructure:"server"`
+	Logger   Logger   `mapstructure:"logger"`
+	Database Database `mapstructure:"database"`
+	JWT      JWT      `mapstructure:"jwt"`
+	Services Services `mapstructure:"services"`
 }
 
 type Services struct {
@@ -55,15 +49,32 @@ type Database struct {
 	Database        string `mapstructure:"database"`
 	MaxOpenConns    int    `mapstructure:"max_open_conns"`
 	MaxIdleConns    int    `mapstructure:"max_idle_conns"`
-	ConnMaxLifetime int    `mapstructure:"conn_max_lifetime"`
+	ConnMaxLifetime int    `mapstructure:"conn_max_lifetime"`  // seconds; keep below the server/proxy idle timeout
+	ConnMaxIdleTime int    `mapstructure:"conn_max_idle_time"` // seconds; shrinks the pool when traffic is quiet
 }
 
 // Server is the configuration for the server
 type Server struct {
-	Mode     string `mapstructure:"mode"`
-	Host     string `mapstructure:"host"`
-	Port     int    `mapstructure:"port"`
-	GRPCPort int    `mapstructure:"grpc_port"`
+	Mode           string               `mapstructure:"mode"`
+	Host           string               `mapstructure:"host"`
+	Port           int                  `mapstructure:"port"`
+	GRPCPort       int                  `mapstructure:"grpc_port"`
+	RateLimit      RateLimitConfig      `mapstructure:"rate_limit"`
+	CircuitBreaker CircuitBreakerConfig `mapstructure:"circuit_breaker"`
+}
+
+// RateLimitConfig is the configuration for HTTP rate limiting
+type RateLimitConfig struct {
+	Limit  int `mapstructure:"limit"`
+	Burst  int `mapstructure:"burst"`
+	Window int `mapstructure:"window"` // in seconds
+}
+
+// CircuitBreakerConfig is the configuration for the HTTP circuit breaker
+type CircuitBreakerConfig struct {
+	FailureThreshold int `mapstructure:"failure_threshold"`
+	SuccessThreshold int `mapstructure:"success_threshold"`
+	OpenTimeout      int `mapstructure:"open_timeout"` // in seconds
 }
 
 // MongoDB is the configuration for MongoDB

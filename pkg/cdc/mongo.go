@@ -1,9 +1,10 @@
 package cdc
 
 import (
-	"encoding/json"
 	"strings"
 	"time"
+
+	"github.com/huynhanx03/go-common/pkg/encoding/json"
 )
 
 // MongoDate handles MongoDB's Extended JSON date format: {"$date": 1234567890}

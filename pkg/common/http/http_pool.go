@@ -6,7 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/huynhanx03/go-common/pkg/utils"
+	"github.com/huynhanx03/go-common/pkg/algorithm"
+	"github.com/huynhanx03/go-common/pkg/cid"
 )
 
 type HTTPClientPool struct {
@@ -53,11 +54,13 @@ func NewHTTPClientPool(config *HTTPClientConfig) *HTTPClientPool {
 
 	client := &http.Client{
 		Timeout: config.Timeout,
-		Transport: &http.Transport{
+		// cid.RoundTripper stamps the context's correlation ID onto every
+		// outgoing request, so calls to other services keep the same cid.
+		Transport: cid.RoundTripper(&http.Transport{
 			MaxIdleConns:        config.MaxIdleConns,
 			MaxIdleConnsPerHost: config.MaxConnsPerHost,
 			IdleConnTimeout:     config.IdleConnTimeout,
-		},
+		}),
 	}
 
 	return &HTTPClientPool{
@@ -91,8 +94,9 @@ func (p *HTTPClientPool) RequestWithRetry(ctx context.Context, req *http.Request
 				lastErr = err
 			}
 
-			// Calculate backoff using shared utility with attempt cap
-			waitDuration := utils.CalculateBackoffByAttempt(attempt, 1*time.Second, maxRetries)
+			// Calculate backoff using exponential backoff with jitter
+			backoff := algorithm.NewExponentialBackoff(1*time.Second, 30*time.Second, 2.0)
+			waitDuration := algorithm.NewJitterBackoff(backoff).Delay(attempt)
 
 			timer := time.NewTimer(waitDuration)
 			select {

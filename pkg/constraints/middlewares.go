@@ -1,15 +1,12 @@
 package constraints
 
+type ContextKey string
+
 const (
-	HeaderAuthorization   = "Authorization"
-	TokenTypeBearer       = "Bearer"
-	ContextKeyUserID      = "user_id"
-	ContextKeyUsername    = "username"
-	ContextKeyIsAdmin     = "is_admin"
-	ContextKeyTenantID    = "tenant_id"
-	ContextKeyRole        = "role"
-	ContextKeyRoleLevel   = "role_level"
-	ContextKeyPermissions = "permissions"
-	ContextKeyClaims      = "claims"
-	ContextKeyTierID      = "tier_id"
+	HeaderAuthorization = "Authorization"
+	TokenTypeBearer     = "Bearer"
+
+	ContextKeyUserID   ContextKey = "user_id"
+	ContextKeyUsername ContextKey = "username"
+	ContextKeyClaims   ContextKey = "claims"
 )
