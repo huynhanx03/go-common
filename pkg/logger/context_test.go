@@ -8,6 +8,7 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/huynhanx03/go-common/pkg/cid"
+	"github.com/huynhanx03/go-common/pkg/settings"
 )
 
 func TestFromContextReturnsStoredLogger(t *testing.T) {
@@ -36,7 +37,7 @@ func TestFromContextFallbackAttachesCID(t *testing.T) {
 }
 
 func TestSyncIgnoresStdoutError(t *testing.T) {
-	l := NewLogger(LoggerConfig{Mode: ModeProd})
+	l := NewLogger(LoggerConfig{Mode: settings.EnvProd})
 	l.Info("before sync")
 
 	// Under `go test`, stdout is a pipe/char device whose fsync fails —

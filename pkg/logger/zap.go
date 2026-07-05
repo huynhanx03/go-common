@@ -11,16 +11,8 @@ import (
 	"github.com/natefinch/lumberjack"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-)
 
-// Modes select the output/encoding profile of the logger.
-const (
-	// ModeDev writes colored, human-readable logs to stdout. Default level: debug.
-	ModeDev = "dev"
-
-	// ModeProd writes JSON logs to stdout (for collectors like Loki/ELK) with
-	// sampling enabled. Default level: info.
-	ModeProd = "prod"
+	"github.com/huynhanx03/go-common/pkg/settings"
 )
 
 // LoggerZap wraps zap.Logger for structured logging with a runtime-adjustable level.
@@ -31,17 +23,20 @@ type LoggerZap struct {
 
 // LoggerConfig holds configuration for logger initialization.
 type LoggerConfig struct {
-	// Mode is ModeDev or ModeProd. Defaults to ModeDev.
-	Mode string
+	// Mode selects the output profile — pass cfg.Server.Mode straight in.
+	// Dev (or empty): colored human-readable stdout, default level debug.
+	// Anything else (staging, prod): JSON stdout with sampling, default
+	// level info — so Debug entries are dropped outside dev.
+	Mode settings.Env
 
 	// Level is the minimum level to log (debug|info|warn|error|dpanic|panic|fatal).
-	// Entries below it are dropped. Defaults to debug in dev, info in prod.
+	// Entries below it are dropped. Defaults to debug in dev, info otherwise.
 	Level string
 
 	// Service metadata stamped on every entry; empty fields are skipped.
 	// Set these when multiple services ship logs to the same aggregator.
 	Service string
-	Env     string
+	Env     settings.Env
 	Version string
 
 	// File output with rotation, enabled when Filename is set (in any mode).
@@ -52,7 +47,7 @@ type LoggerConfig struct {
 	Compress   bool
 
 	// Sampling caps repeated identical messages per second so a hot error
-	// loop cannot saturate I/O. Active in prod mode only. Per second, the
+	// loop cannot saturate I/O. Active outside dev mode. Per second, the
 	// first SamplingInitial entries of an identical message are logged, then
 	// one of every SamplingThereafter.
 	SamplingInitial    int  // default 100
@@ -62,14 +57,11 @@ type LoggerConfig struct {
 
 // withDefaults fills zero-valued fields with sensible defaults.
 func (c LoggerConfig) withDefaults() LoggerConfig {
-	if c.Mode == "" {
-		c.Mode = ModeDev
-	}
 	if c.Level == "" {
-		if c.Mode == ModeProd {
-			c.Level = "info"
-		} else {
+		if c.Mode.IsDev() {
 			c.Level = "debug"
+		} else {
+			c.Level = "info"
 		}
 	}
 	if c.MaxSize == 0 {
@@ -91,8 +83,8 @@ func (c LoggerConfig) withDefaults() LoggerConfig {
 }
 
 // NewLogger creates a logger according to cfg:
-//   - dev mode: colored human-readable output on stdout
-//   - prod mode: JSON output on stdout, sampled
+//   - dev (or empty) mode: colored human-readable output on stdout
+//   - any other mode (staging, prod): JSON output on stdout, sampled
 //   - any mode: additional JSON file output with rotation when Filename is set
 //
 // The level can be changed at runtime via SetLevel / LevelHandler.
@@ -101,15 +93,15 @@ func NewLogger(cfg LoggerConfig) *LoggerZap {
 	level := zap.NewAtomicLevelAt(parseLevel(cfg.Level))
 
 	var cores []zapcore.Core
-	if cfg.Mode == ModeProd {
+	if cfg.Mode.IsDev() {
 		cores = append(cores, zapcore.NewCore(
-			zapcore.NewJSONEncoder(fileEncoderConfig()),
+			zapcore.NewConsoleEncoder(consoleEncoderConfig()),
 			zapcore.AddSync(os.Stdout),
 			level,
 		))
 	} else {
 		cores = append(cores, zapcore.NewCore(
-			zapcore.NewConsoleEncoder(consoleEncoderConfig()),
+			zapcore.NewJSONEncoder(fileEncoderConfig()),
 			zapcore.AddSync(os.Stdout),
 			level,
 		))
@@ -127,7 +119,7 @@ func NewLogger(cfg LoggerConfig) *LoggerZap {
 	}
 
 	core := zapcore.NewTee(cores...)
-	if cfg.Mode == ModeProd && !cfg.DisableSampling {
+	if !cfg.Mode.IsDev() && !cfg.DisableSampling {
 		core = zapcore.NewSamplerWithOptions(core, time.Second, cfg.SamplingInitial, cfg.SamplingThereafter)
 	}
 
@@ -194,7 +186,7 @@ func serviceFields(cfg LoggerConfig) []zap.Field {
 		fields = append(fields, zap.String("service", cfg.Service))
 	}
 	if cfg.Env != "" {
-		fields = append(fields, zap.String("env", cfg.Env))
+		fields = append(fields, zap.String("env", string(cfg.Env)))
 	}
 	if cfg.Version != "" {
 		fields = append(fields, zap.String("version", cfg.Version))

@@ -8,21 +8,34 @@ import (
 	"testing"
 
 	"go.uber.org/zap/zapcore"
+
+	"github.com/huynhanx03/go-common/pkg/settings"
 )
 
 func TestWithDefaultsDev(t *testing.T) {
+	// Empty mode counts as dev — a zero-config local run gets debug logs.
 	cfg := LoggerConfig{}.withDefaults()
 
-	if cfg.Mode != ModeDev {
-		t.Errorf("Mode = %q, want %q", cfg.Mode, ModeDev)
+	if !cfg.Mode.IsDev() {
+		t.Errorf("Mode = %q, want dev", cfg.Mode)
 	}
 	if cfg.Level != "debug" {
 		t.Errorf("Level = %q, want debug", cfg.Level)
 	}
 }
 
+func TestStagingBehavesLikeProd(t *testing.T) {
+	// Anything that is not dev fails toward the safe profile: info level.
+	for _, mode := range []settings.Env{settings.EnvStaging, "typo-env"} {
+		l := NewLogger(LoggerConfig{Mode: mode})
+		if l.Core().Enabled(zapcore.DebugLevel) {
+			t.Errorf("mode %q must not enable debug level", mode)
+		}
+	}
+}
+
 func TestWithDefaultsProd(t *testing.T) {
-	cfg := LoggerConfig{Mode: ModeProd}.withDefaults()
+	cfg := LoggerConfig{Mode: settings.EnvProd}.withDefaults()
 
 	if cfg.Level != "info" {
 		t.Errorf("Level = %q, want info", cfg.Level)
@@ -33,12 +46,12 @@ func TestWithDefaultsProd(t *testing.T) {
 }
 
 func TestDevLogsDebugProdDoesNot(t *testing.T) {
-	dev := NewLogger(LoggerConfig{Mode: ModeDev})
+	dev := NewLogger(LoggerConfig{Mode: settings.EnvDev})
 	if !dev.Core().Enabled(zapcore.DebugLevel) {
 		t.Error("dev logger should enable debug level")
 	}
 
-	prod := NewLogger(LoggerConfig{Mode: ModeProd})
+	prod := NewLogger(LoggerConfig{Mode: settings.EnvProd})
 	if prod.Core().Enabled(zapcore.DebugLevel) {
 		t.Error("prod logger should not enable debug level")
 	}
@@ -48,7 +61,7 @@ func TestDevLogsDebugProdDoesNot(t *testing.T) {
 }
 
 func TestSetLevelAtRuntime(t *testing.T) {
-	l := NewLogger(LoggerConfig{Mode: ModeDev})
+	l := NewLogger(LoggerConfig{Mode: settings.EnvDev})
 
 	if err := l.SetLevel("error"); err != nil {
 		t.Fatalf("SetLevel: %v", err)
@@ -69,7 +82,7 @@ func TestSetLevelAtRuntime(t *testing.T) {
 }
 
 func TestLevelHandler(t *testing.T) {
-	l := NewLogger(LoggerConfig{Mode: ModeProd})
+	l := NewLogger(LoggerConfig{Mode: settings.EnvProd})
 
 	rec := httptest.NewRecorder()
 	l.LevelHandler().ServeHTTP(rec, httptest.NewRequest("GET", "/log/level", nil))
@@ -88,7 +101,7 @@ func TestLevelHandler(t *testing.T) {
 func TestServiceMetadataAndFileOutput(t *testing.T) {
 	logFile := filepath.Join(t.TempDir(), "app.log")
 	l := NewLogger(LoggerConfig{
-		Mode:     ModeProd,
+		Mode:     settings.EnvProd,
 		Service:  "judgify-api",
 		Env:      "test",
 		Version:  "1.2.3",
