@@ -2,35 +2,32 @@ package apperr
 
 import "fmt"
 
-// AppError is the custom error structure for the application
+// AppError is the custom error structure for the application.
+// HTTPStatus is derived from Code via response.GetHTTPCode().
 type AppError struct {
-	Code       int    `json:"code"`
-	Message    string `json:"message"`
-	RootCause  error  `json:"-"`
-	HTTPStatus int    `json:"-"`
+	Code      int    `json:"code"`
+	Message   string `json:"message"`
+	RootCause error  `json:"-"`
 }
 
-// Error implements the error interface
+// Error implements the error interface.
 func (e *AppError) Error() string {
-	return fmt.Sprintf("Code: %d, Message: %s, RootCause: %v", e.Code, e.Message, e.RootCause)
-}
-
-// New creates a new AppError
-func New(code int, message string, httpStatus int, rootCause error) *AppError {
-	return &AppError{
-		Code:       code,
-		Message:    message,
-		HTTPStatus: httpStatus,
-		RootCause:  rootCause,
+	if e.RootCause != nil {
+		return fmt.Sprintf("code=%d msg=%s cause=%v", e.Code, e.Message, e.RootCause)
 	}
+	return fmt.Sprintf("code=%d msg=%s", e.Code, e.Message)
 }
 
-// Wrap returns a new AppError wrapping an existing error
-func Wrap(err error, code int, message string, httpStatus int) *AppError {
+// Unwrap returns the root cause for errors.Is/As chain.
+func (e *AppError) Unwrap() error {
+	return e.RootCause
+}
+
+// New creates a new AppError. HTTPStatus is derived from Code automatically.
+func New(code int, message string, cause error) *AppError {
 	return &AppError{
-		Code:       code,
-		Message:    message,
-		HTTPStatus: httpStatus,
-		RootCause:  err,
+		Code:      code,
+		Message:   message,
+		RootCause: cause,
 	}
 }

@@ -1,16 +1,32 @@
 package workerpool
 
-import "time"
+import (
+	"time"
+
+	"github.com/panjf2000/ants/v2"
+	"go.uber.org/zap"
+)
+
+// Logger is the minimal logging interface the pools write to.
+type Logger = ants.Logger
 
 // Option represents the optional function.
 type Option func(opts *Options)
 
-func loadOptions(options ...Option) *Options {
+func loadOptions(options ...Option) []ants.Option {
 	opts := new(Options)
 	for i := range options {
 		options[i](opts)
 	}
-	return opts
+	return []ants.Option{ants.WithOptions(ants.Options{
+		ExpiryDuration:   opts.ExpiryDuration,
+		PreAlloc:         opts.PreAlloc,
+		MaxBlockingTasks: opts.MaxBlockingTasks,
+		Nonblocking:      opts.Nonblocking,
+		PanicHandler:     opts.PanicHandler,
+		Logger:           opts.Logger,
+		DisablePurge:     opts.DisablePurge,
+	})}
 }
 
 // Options contains all options which will be applied when instantiating a pool.
@@ -29,6 +45,9 @@ type Options struct {
 
 	// PanicHandler is the function to handle panics.
 	PanicHandler func(any)
+
+	// Logger is the customized logger for logging info; the pool default is used when nil.
+	Logger Logger
 
 	// DisablePurge indicates whether to turn off the automatic purge of expired workers.
 	DisablePurge bool
@@ -69,9 +88,29 @@ func WithPanicHandler(panicHandler func(any)) Option {
 	}
 }
 
+// WithLogger sets up a customized logger.
+func WithLogger(logger Logger) Option {
+	return func(opts *Options) {
+		opts.Logger = logger
+	}
+}
+
+// WithZapLogger routes pool logs to a zap logger.
+func WithZapLogger(l *zap.Logger) Option {
+	return WithLogger(zapLogger{sugar: l.Sugar()})
+}
+
 // WithDisablePurge indicates whether we turn off automatically purge.
 func WithDisablePurge(disable bool) Option {
 	return func(opts *Options) {
 		opts.DisablePurge = disable
 	}
+}
+
+type zapLogger struct {
+	sugar *zap.SugaredLogger
+}
+
+func (z zapLogger) Printf(format string, args ...any) {
+	z.sugar.Infof(format, args...)
 }

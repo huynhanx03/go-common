@@ -17,36 +17,25 @@ This package provides a probabilistic data structure that can check if an elemen
 ### Basic Example
 
 ```go
-package main
+// Initialize a Bloom Filter
+// Capacity: 1,000,000 elements
+// False Positive Rate: 1% (0.01)
+bf, err := bloom.New(1_000_000, 0.01)
+if err != nil {
+	log.Fatal(err)
+}
 
-import (
-	"fmt"
-	"log"
+// Add keys (input must be uint64 hash)
+hash := uint64(123456789)
+bf.Add(hash)
 
-	"github.com/huynhanx03/go-common/pkg/datastructs/bloom"
-)
+// Check existence
+if bf.Has(hash) {
+	fmt.Println("Element potentially exists")
+}
 
-func main() {
-	// Initialize a Bloom Filter
-	// Capacity: 1,000,000 elements
-	// False Positive Rate: 1% (0.01)
-	bf, err := bloom.New(1_000_000, 0.01)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// Add keys (input must be uint64 hash)
-	hash := uint64(123456789)
-	bf.Add(hash)
-
-	// Check existence
-	if bf.Has(hash) {
-		fmt.Println("Element potentially exists")
-	}
-
-	if !bf.Has(99999) {
-		fmt.Println("Element definitely does not exist")
-	}
+if !bf.Has(99999) {
+	fmt.Println("Element definitely does not exist")
 }
 ```
 

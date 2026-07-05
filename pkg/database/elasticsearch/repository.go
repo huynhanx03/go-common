@@ -3,12 +3,12 @@ package elasticsearch
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 
 	"github.com/huynhanx03/go-common/pkg/constraints"
 	"github.com/huynhanx03/go-common/pkg/dto"
+	"github.com/huynhanx03/go-common/pkg/encoding/json"
 
 	"github.com/elastic/go-elasticsearch/v8/esapi"
 )

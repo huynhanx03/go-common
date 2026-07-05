@@ -28,6 +28,9 @@ const (
 	// Not found errors (44000-44999)
 	CodeNotFound = 44000 // Resource not found
 
+	// Rate limiting (42900-42999)
+	CodeTooManyRequests = 42900 // Too many requests
+
 	// Conflict errors (49000-49999)
 	CodeConflict = 49000 // Conflict
 
@@ -38,54 +41,38 @@ const (
 	CodeRedisError     = 50003 // Redis error
 )
 
-// GetHTTPCode returns the standard HTTP status code for a given business code
-func GetHTTPCode(code int) int {
-	// 1. Exact Match for Specific RFC Codes
-	switch code {
-	case CodeSuccess, CodeUpdated, CodeDeleted, CodeRetrieved:
-		return http.StatusOK // 200
-	case CodeCreated:
-		return http.StatusCreated // 201
-	case CodeParamInvalid, CodeBadRequest, CodeInvalidID, CodeInternalError:
-		return http.StatusBadRequest // 400
-	case CodeUnauthorized, CodeInvalidToken, CodeTokenExpired, CodeInvalidPassword:
-		return http.StatusUnauthorized // 401
-	case CodeForbidden, CodeAccountNotFound:
-		// AccountNotFound can be 404, but often for auth it's 401/403 or 404.
-		// Let's stick to NotFound for AccountNotFound if it's resource lookup,
-		// or Unauthorized if login.
-		// Assuming CodeAccountNotFound is resource:
-		if code == CodeAccountNotFound {
-			return http.StatusNotFound
-		}
-		return http.StatusForbidden // 403
-	case CodeNotFound:
-		return http.StatusNotFound // 404
-	case CodeConflict:
-		return http.StatusConflict // 409
-	case CodeValidationFailed:
-		return http.StatusUnprocessableEntity // 422
-	case CodeInternalServer, CodeDatabaseError, CodeMongoDBError, CodeRedisError:
-		return http.StatusInternalServerError // 500
-	}
+// httpCodeOverrides lists business codes whose HTTP status deviates from
+// their range mapping below.
+var httpCodeOverrides = map[int]int{
+	CodeCreated:          http.StatusCreated,             // 201 within the 2xx range
+	CodeValidationFailed: http.StatusUnprocessableEntity, // 422 within the 400 range
+	CodeAccountNotFound:  http.StatusNotFound,            // resource lookup miss, not an auth failure
+}
 
-	// 2. Fallback Range Mapping
-	switch {
-	case code >= 20000 && code < 30000:
-		return http.StatusOK
-	case code >= 40000 && code < 41000:
-		return http.StatusBadRequest
-	case code >= 41000 && code < 42000:
-		return http.StatusUnauthorized
-	case code >= 43000 && code < 44000:
-		return http.StatusForbidden
-	case code >= 44000 && code < 45000:
-		return http.StatusNotFound
-	case code >= 49000 && code < 50000:
-		return http.StatusConflict
-	case code >= 50000 && code < 60000:
-		return http.StatusInternalServerError
-	default:
-		return http.StatusInternalServerError
+// httpCodeRanges maps business-code ranges [min, max) to HTTP statuses.
+var httpCodeRanges = []struct {
+	min, max, status int
+}{
+	{20000, 30000, http.StatusOK},
+	{40000, 41000, http.StatusBadRequest},
+	{41000, 42000, http.StatusUnauthorized},
+	{42900, 43000, http.StatusTooManyRequests},
+	{43000, 44000, http.StatusForbidden},
+	{44000, 45000, http.StatusNotFound},
+	{49000, 50000, http.StatusConflict},
+	{50000, 60000, http.StatusInternalServerError},
+}
+
+// GetHTTPCode returns the standard HTTP status code for a given business
+// code: specific overrides first, then the code's range, defaulting to 500.
+func GetHTTPCode(code int) int {
+	if status, ok := httpCodeOverrides[code]; ok {
+		return status
 	}
+	for _, r := range httpCodeRanges {
+		if code >= r.min && code < r.max {
+			return r.status
+		}
+	}
+	return http.StatusInternalServerError
 }

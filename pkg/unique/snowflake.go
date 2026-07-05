@@ -82,12 +82,13 @@ func (n *SnowflakeNode) Generate() int64 {
 	defer n.mu.Unlock()
 
 	var now int64
+	nanos := n.clock.Now()
 	// Safety auto-switch to Seconds if total bits are tight (< 50)
 	// 50 bits = ~35 years in millis, acceptable. < 50 bits risks quick overflow.
 	if n.totalBits < 50 {
-		now = n.clock.Now().Unix() // Use Seconds
+		now = nanos / 1e9 // Seconds
 	} else {
-		now = n.clock.Now().UnixMilli() // Use Milliseconds
+		now = nanos / 1e6 // Milliseconds
 	}
 
 	if now < n.timestamp {
@@ -98,10 +99,11 @@ func (n *SnowflakeNode) Generate() int64 {
 		n.step = (n.step + 1) & n.stepMax
 		if n.step == 0 {
 			for now <= n.timestamp {
+				nanos = n.clock.Now()
 				if n.totalBits < 50 {
-					now = n.clock.Now().Unix()
+					now = nanos / 1e9
 				} else {
-					now = n.clock.Now().UnixMilli()
+					now = nanos / 1e6
 				}
 			}
 		}

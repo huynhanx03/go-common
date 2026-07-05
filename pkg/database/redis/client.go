@@ -2,7 +2,6 @@ package redis
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -10,6 +9,8 @@ import (
 	redisV9 "github.com/redis/go-redis/v9"
 
 	"github.com/huynhanx03/go-common/pkg/common/cache"
+	"github.com/huynhanx03/go-common/pkg/dto"
+	"github.com/huynhanx03/go-common/pkg/encoding/json"
 	"github.com/huynhanx03/go-common/pkg/settings"
 	"github.com/huynhanx03/go-common/pkg/utils"
 )
@@ -179,7 +180,7 @@ func (r *RedisEngine) Decr(ctx context.Context, key string) (int64, error) {
 }
 
 // GeoAdd adds geospatial locations
-func (r *RedisEngine) GeoAdd(ctx context.Context, key string, locations ...*cache.GeoLocation) error {
+func (r *RedisEngine) GeoAdd(ctx context.Context, key string, locations ...*dto.GeoLocation) error {
 	r.rwMutex.Lock()
 	defer r.rwMutex.Unlock()
 
@@ -237,7 +238,7 @@ func (r *RedisEngine) Client() redisV9.UniversalClient {
 }
 
 // GeoRadius searches for members within a radius.
-func (r *RedisEngine) GeoRadius(ctx context.Context, key string, longitude, latitude, radius float64, unit string) ([]*cache.GeoLocation, error) {
+func (r *RedisEngine) GeoRadius(ctx context.Context, key string, longitude, latitude, radius float64, unit string) ([]*dto.GeoLocation, error) {
 	r.rwMutex.Lock()
 	defer r.rwMutex.Unlock()
 
@@ -258,13 +259,65 @@ func (r *RedisEngine) GeoRadius(ctx context.Context, key string, longitude, lati
 		return nil, err
 	}
 
-	locations := make([]*cache.GeoLocation, len(res))
+	locations := make([]*dto.GeoLocation, len(res))
 	for i, item := range res {
-		locations[i] = &cache.GeoLocation{
+		locations[i] = &dto.GeoLocation{
 			Member:    item.Name,
 			Longitude: item.Longitude,
 			Latitude:  item.Latitude,
 		}
 	}
 	return locations, nil
+}
+
+// SetNX sets a value only if the key does not already exist. Returns true if the key was set.
+func (r *RedisEngine) SetNX(ctx context.Context, key string, value any, ttl time.Duration) (bool, error) {
+	byteValue, err := json.Marshal(value)
+	if err != nil {
+		return false, err
+	}
+	return r.client.SetNX(ctx, key, byteValue, ttl).Result()
+}
+
+// Expire sets a TTL on an existing key.
+func (r *RedisEngine) Expire(ctx context.Context, key string, ttl time.Duration) error {
+	return r.client.Expire(ctx, key, ttl).Err()
+}
+
+// ZAdd adds members to a sorted set.
+func (r *RedisEngine) ZAdd(ctx context.Context, key string, members ...*dto.ZMember) error {
+	if len(members) == 0 {
+		return nil
+	}
+
+	redisMembers := make([]redisV9.Z, len(members))
+	for i, m := range members {
+		redisMembers[i] = redisV9.Z{
+			Score:  m.Score,
+			Member: m.Member,
+		}
+	}
+
+	return r.client.ZAdd(ctx, key, redisMembers...).Err()
+}
+
+// ZRemRangeByScore removes members in a sorted set within the given score range.
+func (r *RedisEngine) ZRemRangeByScore(ctx context.Context, key string, min, max string) error {
+	return r.client.ZRemRangeByScore(ctx, key, min, max).Err()
+}
+
+// ZCount counts members in a sorted set within the given score range.
+func (r *RedisEngine) ZCount(ctx context.Context, key string, min, max string) (int64, error) {
+	return r.client.ZCount(ctx, key, min, max).Result()
+}
+
+// ZRange returns members in a sorted set within the given index range.
+func (r *RedisEngine) ZRange(ctx context.Context, key string, start, stop int64) ([]string, error) {
+	return r.client.ZRange(ctx, key, start, stop).Result()
+}
+
+// Keys returns all keys matching a pattern.
+// Caution: KEYS can be slow in production; prefer SCAN for large keyspaces.
+func (r *RedisEngine) Keys(ctx context.Context, pattern string) ([]string, error) {
+	return r.client.Keys(ctx, pattern).Result()
 }

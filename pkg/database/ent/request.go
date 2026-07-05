@@ -38,7 +38,8 @@ func ApplyFilters(filters []dto.SearchFilter, selector *sql.Selector) {
 				selector.Where(sql.ContainsFold(key, str))
 			}
 		case SearchTypeExact, SearchTypeFilter:
-			selector.Where(sql.EQ(key, f.Value))
+			// For arrays like tag_ids, use IN clause automatically
+			selector.Where(sql.In(key, f.Value))
 		default:
 			selector.Where(sql.EQ(key, f.Value))
 		}

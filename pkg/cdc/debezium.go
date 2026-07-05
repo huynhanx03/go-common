@@ -1,8 +1,9 @@
 package cdc
 
 import (
-	"encoding/json"
 	"fmt"
+
+	"github.com/huynhanx03/go-common/pkg/encoding/json"
 )
 
 // Operation represents the type of operation in a Debezium event

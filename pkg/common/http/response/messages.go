@@ -26,6 +26,9 @@ var Msg = map[int]string{
 	// Not found
 	CodeNotFound: "Resource not found",
 
+	// Rate limiting
+	CodeTooManyRequests: "Too many requests",
+
 	// Conflict
 	CodeConflict: "Conflict",
 

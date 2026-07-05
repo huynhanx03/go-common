@@ -2,7 +2,6 @@ package ent
 
 import (
 	"context"
-	"time"
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
@@ -11,25 +10,22 @@ import (
 )
 
 type (
-	DeleteMutation interface {
-		SetDeletedAt(time.Time)
-		SetDeletedBy(any)
-		SetOp(ent.Op)
-	}
-
 	softDeleteKey struct{}
 
-	DeleteQuery interface {
+	// Query defines the requirements for soft-delete filtering.
+	SoftDeleteQuery interface {
 		WhereP(...func(*sql.Selector))
 	}
 )
 
-// SoftDeleteMixin implements the soft delete pattern for schemas.
+// SoftDeleteMixin provides soft-delete fields and predicate helper.
+// Hooks and Interceptors are implemented in the schema package
+// where the generated client type is available.
 type SoftDeleteMixin struct {
 	mixin.Schema
 }
 
-// Fields of the SoftDeleteMixin.
+// Fields adds soft-delete tracking columns.
 func (SoftDeleteMixin) Fields() []ent.Field {
 	return []ent.Field{
 		field.Time(SoftDeleteAtColumnName).
@@ -41,54 +37,14 @@ func (SoftDeleteMixin) Fields() []ent.Field {
 	}
 }
 
-// Hooks of the SoftDeleteMixin.
-func (d SoftDeleteMixin) Hooks() []ent.Hook {
-	return []ent.Hook{
-		On(
-			func(next ent.Mutator) ent.Mutator {
-				return ent.MutateFunc(func(ctx context.Context, m ent.Mutation) (ent.Value, error) {
-					if IsSkipSoftDelete(ctx) {
-						return next.Mutate(ctx, m)
-					}
-
-					if deleteMutation, ok := m.(DeleteMutation); ok {
-						deleteMutation.SetOp(ent.OpDelete)
-						deleteMutation.SetDeletedAt(time.Now().UTC())
-						// deleteMutation.SetDeletedBy(userID)
-					}
-
-					return next.Mutate(ctx, m)
-				})
-			},
-			ent.OpDelete|ent.OpDeleteOne,
-		),
-	}
-}
-
-// Interceptors of the SoftDeleteMixin.
-func (d SoftDeleteMixin) Interceptors() []ent.Interceptor {
-	return []ent.Interceptor{
-		ent.TraverseFunc(func(ctx context.Context, q ent.Query) error {
-			if IsSkipSoftDelete(ctx) {
-				return nil
-			}
-
-			if query, ok := q.(DeleteQuery); ok {
-				d.P(query)
-			}
-
-			return nil
-		}),
-	}
-}
-
-func (d SoftDeleteMixin) P(w DeleteQuery) {
+// P appends the deleted_at IS NULL predicate.
+func (SoftDeleteMixin) P(w SoftDeleteQuery) {
 	w.WhereP(
-		sql.FieldIsNull(d.Fields()[0].Descriptor().Name),
+		sql.FieldIsNull(SoftDeleteAtColumnName),
 	)
 }
 
-// SkipSoftDelete returns a new context that skips the soft-delete interceptor/mutators.
+// SkipSoftDelete returns a context that bypasses soft-delete filtering.
 func SkipSoftDelete(parent context.Context) context.Context {
 	return context.WithValue(parent, softDeleteKey{}, true)
 }

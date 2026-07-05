@@ -1,88 +1,70 @@
-# WorkerPool
+# workerpool
 
-A high-performance, low-cost goroutine pool for Go, designed to manage and recycle a massive number of goroutines, reducing memory consumption and preventing goroutine leaks.
+Goroutine pools backed by [ants](https://github.com/panjf2000/ants). This package
+is the only import point — applications never depend on ants directly, so the
+underlying engine can change without touching call sites.
 
-## Prerequisites
+## Pool types
 
-- Go 1.18+
+| Type | Task shape | Use when |
+|------|-----------|----------|
+| `Pool` | `Submit(func())` | Heterogeneous tasks as closures |
+| `GenericPool[T]` | `Invoke(T)` | One typed handler, many payloads |
+| `PoolFunc` | `Invoke(any)` | Like `GenericPool` but untyped (legacy) |
+| `MultiPool` | `Submit(func())` | Very high throughput; shards across sub-pools |
+| `GenericMultiPool[T]` | `Invoke(T)` | Sharded + typed handler |
+| `MultiPoolFunc` | `Invoke(any)` | Sharded + untyped handler |
 
-## Features
+Multi-pools take a `LoadBalancingStrategy`: `RoundRobin` or `LeastTasks`.
 
-- **Automatic Goroutine Management**: Automatically manages the lifecycle of goroutines, recycling them for reuse.
-- **Resource Saving**: Significantly reduces memory consumption compared to native goroutines.
-- **Non-blocking Mechanism**: Prevents deadlock when the pool is full using non-blocking mode or max blocking tasks.
-- **Periodic Purge**: Automatically cleans up expired/idle workers to free up resources.
-- **Panic Handling**: Supports custom panic handlers to prevent program crashes from individual tasks.
-- **Generic Support**: Provides type-safe `GenericPool[T]` for better developer experience and performance.
+All pools expose `Running()`, `Free()`, `Waiting()`, `Cap()`, `Tune(size)`,
+`IsClosed()`, `Release()`, `ReleaseTimeout(d)`, `ReleaseContext(ctx)`, `Reboot()`.
 
 ## Usage
 
-### 1. Common Pool
-Use `NewPool` to create a pool and `Submit` to dispatch tasks.
-
 ```go
-package main
+// Typed worker pool bound to one handler.
+pool, err := workerpool.NewGenericPool(8, func(job Job) {
+    process(job)
+})
+defer pool.Release()
 
-import (
-	"fmt"
-	"sync"
-	"time"
-
-	"github.com/huynhanx03/go-common/pkg/common/workerpool"
-)
-
-func main() {
-	// Create a pool with capacity 10
-	p, _ := workerpool.NewPool(10)
-	defer p.Release()
-
-	var wg sync.WaitGroup
-	for i := 0; i < 20; i++ {
-		wg.Add(1)
-		_ = p.Submit(func() {
-			defer wg.Done()
-			fmt.Println("Task running")
-			time.Sleep(10 * time.Millisecond)
-		})
-	}
-	wg.Wait()
-}
+err = pool.Invoke(Job{ID: 1})
 ```
 
-### 2. Generic Pool
-Use `NewGenericPool` when you need to pass specific typed arguments to workers.
-
 ```go
-package main
-
-import (
-	"fmt"
-
-	"github.com/huynhanx03/go-common/pkg/common/workerpool"
+// Closure pool with options.
+pool, err := workerpool.NewPool(32,
+    workerpool.WithNonblocking(true),
+    workerpool.WithPanicHandler(func(r any) { log.Error("worker panic", r) }),
+    workerpool.WithZapLogger(zapLogger),
 )
-
-func main() {
-	// Create a pool that accepts strings
-	p, _ := workerpool.NewGenericPool(5, func(name string) {
-		fmt.Printf("Hello, %s!\n", name)
-	})
-	defer p.Release()
-
-	p.Invoke("Alice")
-	p.Invoke("Bob")
-}
 ```
 
-## Configuration
+```go
+// Default shared pool — "go with reuse" semantics, no setup.
+workerpool.Submit(func() { doWork() })
+```
 
-You can customize the pool using functional options:
+## Options
 
-- `WithNonblocking(bool)`: Returns `ErrPoolOverload` immediately if pool is full, instead of blocking.
-- `WithMaxBlockingTasks(int)`: Sets the maximum number of goroutines that can be blocked waiting for a worker.
-- `WithExpiryDuration(time.Duration)`: Sets the duration after which idle workers are purged (default 1s).
-- `WithPanicHandler(func(any))`: Sets a custom handler for panics occurred within tasks.
-- `WithPreAlloc(bool)`: Pre-allocates the worker queue for slightly faster startup but higher initial memory.
+- `WithExpiryDuration(d)` — interval for purging idle workers
+- `WithPreAlloc(bool)` — pre-allocate worker queue memory
+- `WithMaxBlockingTasks(n)` — cap on blocked submitters
+- `WithNonblocking(bool)` — fail fast with `ErrPoolOverload` instead of blocking
+- `WithPanicHandler(fn)` — recover handler for task panics
+- `WithLogger(l)` / `WithZapLogger(zl)` — pool logging
+- `WithDisablePurge(bool)` — keep idle workers forever
 
-## Reference
+## Errors
 
-This package incorporates the core design principles and optimizations from [ants](https://github.com/panjf2000/ants) by Andy Pan.
+`ErrPoolClosed`, `ErrPoolOverload`, `ErrLackPoolFunc`, `ErrTimeout`,
+`ErrInvalidPoolExpiry`, `ErrInvalidPreAllocSize`, `ErrInvalidPoolIndex`,
+`ErrInvalidLoadBalancingStrategy`, `ErrInvalidMultiPoolSize` — match with
+`errors.Is`.
+
+## Semantics notes
+
+- A non-positive pool size means an **unbounded** pool.
+- By default `Submit`/`Invoke` block when the pool is full; set
+  `WithNonblocking(true)` or `WithMaxBlockingTasks(n)` to bound that.
