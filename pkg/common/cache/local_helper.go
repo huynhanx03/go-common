@@ -34,12 +34,20 @@ func Delete(c LocalCache[string, any], key string) {
 	c.Delete(key)
 }
 
-// Fetch retrieves a cached value. On miss, calls fn, caches the result with
-// TTL (±10% jitter), and returns it. Singleflight deduplicates concurrent
-// loads: only one goroutine calls fn, the rest wait for its result.
+// Fetch retrieves a cached value, loading it with fn on miss. It bundles the
+// full anti-stampede toolkit:
 //
-// When fn reports cache.ErrNotFound, that outcome is cached for NegativeTTL —
-// repeated lookups of nonexistent IDs stop reaching the source.
+//   - singleflight — concurrent misses trigger a single fn call;
+//   - TTL jitter (±10%) — keys written in the same burst don't expire together;
+//   - probabilistic early expiration (XFetch) — hits near the end of the TTL
+//     refresh the key in the background while the cached value is returned
+//     immediately, so hot keys never expire mid-traffic;
+//   - negative caching — when fn reports cache.ErrNotFound, that outcome is
+//     cached for NegativeTTL and lookups of nonexistent IDs stop reaching the
+//     source.
+//
+// Keys written by Fetch are internal envelopes — read them through Fetch, not
+// Get.
 func Fetch[T any](
 	c LocalCache[string, any],
 	sf *singleflight.Group,
@@ -49,53 +57,16 @@ func Fetch[T any](
 ) (T, error) {
 	var zero T
 
-	if val, ok := Get[T](c, key); ok {
-		return val, nil
-	}
-	if _, neg := Get[negativeMarker](c, key+negativeSuffix); neg {
-		return zero, ErrNotFound
-	}
-
-	return doTyped(sf, key, func() (T, error) {
-		if val, ok := Get[T](c, key); ok {
-			return val, nil
-		}
-		if _, neg := Get[negativeMarker](c, key+negativeSuffix); neg {
-			return zero, ErrNotFound
-		}
-
-		value, err := fn()
-		switch {
-		case err == nil:
-			SetWithTTL(c, key, value, jitterTTL(ttl))
-		case errors.Is(err, ErrNotFound):
-			SetWithTTL(c, key+negativeSuffix, negativeMarker{}, jitterTTL(NegativeTTL))
-		}
-		return value, err
-	})
-}
-
-// FetchWithRefresh is Fetch plus probabilistic early expiration (XFetch):
-// every hit independently decides — with probability rising as the TTL nears
-// its end, and earlier for values that are slow to compute — to refresh the
-// key in the background while the cached value is returned immediately. Hot
-// keys never expire mid-traffic: no cold miss, no stampede.
-//
-// Keys written by FetchWithRefresh are internal envelopes — read them through
-// FetchWithRefresh, not Get.
-func FetchWithRefresh[T any](
-	c LocalCache[string, any],
-	sf *singleflight.Group,
-	key string,
-	ttl time.Duration,
-	fn func() (T, error),
-) (T, error) {
 	load := func() (T, error) {
 		start := time.Now()
 		value, err := fn()
-		if err == nil {
+		switch {
+		case err == nil:
 			jttl := jitterTTL(ttl)
 			SetWithTTL(c, key, newEnvelope(value, jttl, time.Since(start)), jttl)
+		case errors.Is(err, ErrNotFound):
+			Delete(c, key)
+			SetWithTTL(c, key+negativeSuffix, negativeMarker{}, jitterTTL(NegativeTTL))
 		}
 		return value, err
 	}
@@ -106,10 +77,16 @@ func FetchWithRefresh[T any](
 		}
 		return env.Value, nil
 	}
+	if _, neg := Get[negativeMarker](c, key+negativeSuffix); neg {
+		return zero, ErrNotFound
+	}
 
 	return doTyped(sf, key, func() (T, error) {
 		if env, ok := Get[envelope[T]](c, key); ok {
 			return env.Value, nil
+		}
+		if _, neg := Get[negativeMarker](c, key+negativeSuffix); neg {
+			return zero, ErrNotFound
 		}
 		return load()
 	})

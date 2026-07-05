@@ -94,7 +94,7 @@ func waitFor(t *testing.T, cond func() bool) {
 	t.Fatal("condition not met in time")
 }
 
-func TestFetchWithRefreshLocal(t *testing.T) {
+func TestFetchLocalRefresh(t *testing.T) {
 	c := newFakeLocal()
 	sf := &singleflight.Group{}
 	var calls atomic.Int64
@@ -102,13 +102,13 @@ func TestFetchWithRefreshLocal(t *testing.T) {
 	fn := func() (int64, error) { return calls.Add(1), nil }
 
 	// Miss → loads once.
-	v, err := FetchWithRefresh(c, sf, "k", 150*time.Millisecond, fn)
+	v, err := Fetch(c, sf, "k", 150*time.Millisecond, fn)
 	if err != nil || v != 1 {
 		t.Fatalf("first fetch = %d, %v", v, err)
 	}
 
 	// Fresh hit (instant fn → delta ~0 → refresh probability ~0).
-	if v, _ := FetchWithRefresh(c, sf, "k", 150*time.Millisecond, fn); v != 1 {
+	if v, _ := Fetch(c, sf, "k", 150*time.Millisecond, fn); v != 1 {
 		t.Fatalf("fresh hit = %d, want 1", v)
 	}
 	if calls.Load() != 1 {
@@ -118,19 +118,19 @@ func TestFetchWithRefreshLocal(t *testing.T) {
 	// Past expiry (fakeLocal never evicts): hit serves the stale value
 	// immediately and refreshes in background — XFetch fires with p=1.
 	time.Sleep(200 * time.Millisecond)
-	if v, _ := FetchWithRefresh(c, sf, "k", 150*time.Millisecond, fn); v != 1 {
+	if v, _ := Fetch(c, sf, "k", 150*time.Millisecond, fn); v != 1 {
 		t.Fatalf("stale hit = %d, want 1 (stale served)", v)
 	}
 	waitFor(t, func() bool { return calls.Load() == 2 })
 
 	// After refresh completes, hits serve the new value without reloading.
 	waitFor(t, func() bool {
-		v, _ := FetchWithRefresh(c, sf, "k", 150*time.Millisecond, fn)
+		v, _ := Fetch(c, sf, "k", 150*time.Millisecond, fn)
 		return v == 2
 	})
 }
 
-func TestFetchRemoteWithRefresh(t *testing.T) {
+func TestFetchRemoteRefresh(t *testing.T) {
 	e := newFakeEngine()
 	sf := &singleflight.Group{}
 	ctx := context.Background()
@@ -138,12 +138,12 @@ func TestFetchRemoteWithRefresh(t *testing.T) {
 
 	fn := func(context.Context) (int64, error) { return calls.Add(1), nil }
 
-	v, err := FetchRemoteWithRefresh(ctx, e, sf, "k", 150*time.Millisecond, fn)
+	v, err := FetchRemote(ctx, e, sf, "k", 150*time.Millisecond, fn)
 	if err != nil || v != 1 {
 		t.Fatalf("first fetch = %d, %v", v, err)
 	}
 
-	if v, _ := FetchRemoteWithRefresh(ctx, e, sf, "k", 150*time.Millisecond, fn); v != 1 {
+	if v, _ := FetchRemote(ctx, e, sf, "k", 150*time.Millisecond, fn); v != 1 {
 		t.Fatalf("fresh hit = %d, want 1", v)
 	}
 	if calls.Load() != 1 {
@@ -151,13 +151,13 @@ func TestFetchRemoteWithRefresh(t *testing.T) {
 	}
 
 	time.Sleep(200 * time.Millisecond)
-	if v, _ := FetchRemoteWithRefresh(ctx, e, sf, "k", 150*time.Millisecond, fn); v != 1 {
+	if v, _ := FetchRemote(ctx, e, sf, "k", 150*time.Millisecond, fn); v != 1 {
 		t.Fatalf("stale hit = %d, want 1 (stale served)", v)
 	}
 	waitFor(t, func() bool { return calls.Load() == 2 })
 
 	waitFor(t, func() bool {
-		v, _ := FetchRemoteWithRefresh(ctx, e, sf, "k", 150*time.Millisecond, fn)
+		v, _ := FetchRemote(ctx, e, sf, "k", 150*time.Millisecond, fn)
 		return v == 2
 	})
 }

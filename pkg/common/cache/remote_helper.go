@@ -40,12 +40,21 @@ func DeleteRemote(ctx context.Context, c CacheEngine, key string) error {
 	return c.Delete(ctx, key)
 }
 
-// FetchRemote retrieves a cached value. On miss, calls fn, caches the result
-// with TTL (±10% jitter), and returns it. Singleflight deduplicates
-// concurrent loads.
+// FetchRemote retrieves a cached value, loading it with fn on miss. It bundles
+// the full anti-stampede toolkit:
 //
-// When fn reports cache.ErrNotFound, that outcome is cached for NegativeTTL —
-// repeated lookups of nonexistent IDs stop reaching the source.
+//   - singleflight — concurrent misses trigger a single fn call per instance;
+//   - TTL jitter (±10%) — keys written in the same burst don't expire together;
+//   - probabilistic early expiration (XFetch) — hits near the end of the TTL
+//     refresh the key in the background while the cached value is returned
+//     immediately; the per-request randomization spreads refreshes across
+//     instances, so hot keys never expire mid-traffic;
+//   - negative caching — when fn reports cache.ErrNotFound, that outcome is
+//     cached for NegativeTTL and lookups of nonexistent IDs stop reaching the
+//     source.
+//
+// Keys written by FetchRemote are internal envelopes — read them through
+// FetchRemote, not GetRemote.
 func FetchRemote[T any](
 	ctx context.Context,
 	c CacheEngine,
@@ -56,55 +65,16 @@ func FetchRemote[T any](
 ) (T, error) {
 	var zero T
 
-	if value, ok, _ := GetRemote[T](ctx, c, key); ok {
-		return value, nil
-	}
-	if _, neg, _ := GetRemote[bool](ctx, c, key+negativeSuffix); neg {
-		return zero, ErrNotFound
-	}
-
-	return doTyped(sf, key, func() (T, error) {
-		if value, ok, _ := GetRemote[T](ctx, c, key); ok {
-			return value, nil
-		}
-		if _, neg, _ := GetRemote[bool](ctx, c, key+negativeSuffix); neg {
-			return zero, ErrNotFound
-		}
-
-		value, err := fn(ctx)
-		switch {
-		case err == nil:
-			_ = SetRemote(ctx, c, key, value, jitterTTL(ttl))
-		case errors.Is(err, ErrNotFound):
-			_ = SetRemote(ctx, c, key+negativeSuffix, true, jitterTTL(NegativeTTL))
-		}
-		return value, err
-	})
-}
-
-// FetchRemoteWithRefresh is FetchRemote plus probabilistic early expiration
-// (XFetch): every hit independently decides — with probability rising as the
-// TTL nears its end, and earlier for values that are slow to compute — to
-// refresh the key in the background while the cached value is returned
-// immediately. Hot keys never expire mid-traffic, and because the decision is
-// randomized per request, refreshes spread out across instances.
-//
-// Keys written by FetchRemoteWithRefresh are internal envelopes — read them
-// through FetchRemoteWithRefresh, not GetRemote.
-func FetchRemoteWithRefresh[T any](
-	ctx context.Context,
-	c CacheEngine,
-	sf *singleflight.Group,
-	key string,
-	ttl time.Duration,
-	fn func(ctx context.Context) (T, error),
-) (T, error) {
 	load := func(ctx context.Context) (T, error) {
 		start := time.Now()
 		value, err := fn(ctx)
-		if err == nil {
+		switch {
+		case err == nil:
 			jttl := jitterTTL(ttl)
 			_ = SetRemote(ctx, c, key, newEnvelope(value, jttl, time.Since(start)), jttl)
+		case errors.Is(err, ErrNotFound):
+			_ = DeleteRemote(ctx, c, key)
+			_ = SetRemote(ctx, c, key+negativeSuffix, true, jitterTTL(NegativeTTL))
 		}
 		return value, err
 	}
@@ -119,10 +89,16 @@ func FetchRemoteWithRefresh[T any](
 		}
 		return env.Value, nil
 	}
+	if _, neg, _ := GetRemote[bool](ctx, c, key+negativeSuffix); neg {
+		return zero, ErrNotFound
+	}
 
 	return doTyped(sf, key, func() (T, error) {
 		if env, ok, _ := GetRemote[envelope[T]](ctx, c, key); ok {
 			return env.Value, nil
+		}
+		if _, neg, _ := GetRemote[bool](ctx, c, key+negativeSuffix); neg {
+			return zero, ErrNotFound
 		}
 		return load(ctx)
 	})
