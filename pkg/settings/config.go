@@ -2,6 +2,17 @@ package settings
 
 import "crypto/rsa"
 
+type Env string
+
+const (
+	EnvDev     Env = "dev"
+	EnvStaging Env = "staging"
+	EnvProd    Env = "prod"
+)
+
+func (e Env) IsDev() bool { return e == EnvDev || e == "" }
+func (e Env) IsProd() bool { return e == EnvProd }
+
 type Config struct {
 	Server   Server   `mapstructure:"server"`
 	Logger   Logger   `mapstructure:"logger"`
@@ -55,7 +66,7 @@ type Database struct {
 
 // Server is the configuration for the server
 type Server struct {
-	Mode           string               `mapstructure:"mode"`
+	Mode           Env                  `mapstructure:"mode"`
 	Host           string               `mapstructure:"host"`
 	Port           int                  `mapstructure:"port"`
 	GRPCPort       int                  `mapstructure:"grpc_port"`
