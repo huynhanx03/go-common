@@ -19,7 +19,7 @@ const cacheKeyPrefixRolePermissions = "role_perms::"
 // implement this against their own user/role storage.
 type PermissionProvider interface {
 	// UserRoleID returns the role ID assigned to the given user.
-	UserRoleID(ctx context.Context, userID int) (int, error)
+	UserRoleID(ctx context.Context, userID string) (int, error)
 
 	// RolePermissions returns the aggregated permissions of a role, including
 	// permissions inherited from descendant roles, as map[resourceID]scopeMask.
@@ -69,37 +69,37 @@ func (pc *PermissionChecker) RequirePermission(resourceKey string, requiredScope
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
 
-		userID, ok := ctx.Value(constraints.ContextKeyUserID).(int)
+		userID, ok := ctx.Value(constraints.ContextKeyUserID).(string)
 		if !ok {
-			response.ErrorResponse(c, response.CodeUnauthorized, apperr.New(response.CodeUnauthorized, "user not authenticated", nil))
+			response.ErrorResponse(c, apperr.CodeUnauthorized, apperr.New(apperr.CodeUnauthorized, "user not authenticated", nil))
 			c.Abort()
 			return
 		}
 
 		roleID, err := pc.provider.UserRoleID(ctx, userID)
 		if err != nil {
-			response.ErrorResponse(c, response.CodeForbidden, apperr.New(response.CodeForbidden, "user not found", nil))
+			response.ErrorResponse(c, apperr.CodeForbidden, apperr.New(apperr.CodeForbidden, "user not found", nil))
 			c.Abort()
 			return
 		}
 
 		perms, err := pc.getRolePermissions(ctx, roleID)
 		if err != nil {
-			response.ErrorResponse(c, response.CodeForbidden, apperr.New(response.CodeForbidden, "failed to load permissions", nil))
+			response.ErrorResponse(c, apperr.CodeForbidden, apperr.New(apperr.CodeForbidden, "failed to load permissions", nil))
 			c.Abort()
 			return
 		}
 
 		resourceID := pc.provider.ResourceID(resourceKey)
 		if resourceID == 0 {
-			response.ErrorResponse(c, response.CodeForbidden, apperr.New(response.CodeForbidden, "unknown resource", nil))
+			response.ErrorResponse(c, apperr.CodeForbidden, apperr.New(apperr.CodeForbidden, "unknown resource", nil))
 			c.Abort()
 			return
 		}
 
 		scopeMask, exists := perms[resourceID]
 		if !exists || (scopeMask&requiredScope) != requiredScope {
-			response.ErrorResponse(c, response.CodeForbidden, apperr.New(response.CodeForbidden, "permission denied", nil))
+			response.ErrorResponse(c, apperr.CodeForbidden, apperr.New(apperr.CodeForbidden, "permission denied", nil))
 			c.Abort()
 			return
 		}

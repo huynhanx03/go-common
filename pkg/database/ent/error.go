@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/huynhanx03/go-common/pkg/common/apperr"
-	"github.com/huynhanx03/go-common/pkg/common/http/response"
 )
 
 // ErrorPredicates lets an application register recognizers for its generated
@@ -212,11 +211,11 @@ func MapEntError(err error, messagePrefix string) *apperr.AppError {
 	}
 
 	if isNotFound(err) {
-		return apperr.New(response.CodeNotFound, fmt.Sprintf("%s not found", messagePrefix), err)
+		return apperr.New(apperr.CodeNotFound, fmt.Sprintf("%s not found", messagePrefix), err)
 	}
 
 	if isValidationError(err) {
-		return apperr.New(response.CodeValidationFailed, fmt.Sprintf("%s validation failed", messagePrefix), err)
+		return apperr.New(apperr.CodeValidationFailed, fmt.Sprintf("%s validation failed", messagePrefix), err)
 	}
 
 	if isConstraintError(err) {
@@ -224,31 +223,31 @@ func MapEntError(err error, messagePrefix string) *apperr.AppError {
 
 		switch {
 		case strings.Contains(errStr, "duplicate") || strings.Contains(errStr, "unique"):
-			return apperr.New(response.CodeConflict, fmt.Sprintf("%s already exists", messagePrefix), err)
+			return apperr.New(apperr.CodeConflict, fmt.Sprintf("%s already exists", messagePrefix), err)
 
 		case strings.Contains(errStr, "foreign key"):
 			if strings.Contains(errStr, "delete") || strings.Contains(errStr, "update") {
-				return apperr.New(response.CodeConflict, fmt.Sprintf("%s cannot be modified because it is referenced by other records", messagePrefix), err)
+				return apperr.New(apperr.CodeConflict, fmt.Sprintf("%s cannot be modified because it is referenced by other records", messagePrefix), err)
 			}
-			return apperr.New(response.CodeBadRequest, fmt.Sprintf("%s contains invalid reference data", messagePrefix), err)
+			return apperr.New(apperr.CodeBadRequest, fmt.Sprintf("%s contains invalid reference data", messagePrefix), err)
 
 		case strings.Contains(errStr, "deadlock"):
 			slog.Error("Database deadlock occurred", "error", err)
-			return apperr.New(response.CodeDatabaseError, "Operation temporarily unavailable, please try again", err)
+			return apperr.New(apperr.CodeDatabaseError, "Operation temporarily unavailable, please try again", err)
 		}
 
-		return apperr.New(response.CodeConflict, fmt.Sprintf("%s constraint failed", messagePrefix), err)
+		return apperr.New(apperr.CodeConflict, fmt.Sprintf("%s constraint failed", messagePrefix), err)
 	}
 
 	if isNotLoaded(err) {
 		slog.Error("Server logic error: edge was not loaded before access", "error", err)
-		return apperr.New(response.CodeInternalServer, "Internal server error", err)
+		return apperr.New(apperr.CodeInternalServer, "Internal server error", err)
 	}
 
 	if isNotSingular(err) {
-		return apperr.New(response.CodeInternalError, fmt.Sprintf("%s is not uniquely identifiable", messagePrefix), err)
+		return apperr.New(apperr.CodeBadRequest, fmt.Sprintf("%s is not uniquely identifiable", messagePrefix), err)
 	}
 
 	slog.Error("Unexpected database error", "error", err)
-	return apperr.New(response.CodeDatabaseError, "An unexpected database error occurred", err)
+	return apperr.New(apperr.CodeDatabaseError, "An unexpected database error occurred", err)
 }

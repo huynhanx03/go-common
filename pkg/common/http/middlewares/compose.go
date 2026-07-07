@@ -4,6 +4,8 @@ import (
 	"sync"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/huynhanx03/go-common/pkg/common/apperr"
 	"github.com/huynhanx03/go-common/pkg/common/http/response"
 )
 
@@ -73,7 +75,7 @@ func Parallel(handlers ...gin.HandlerFunc) gin.HandlerFunc {
 
 		// Check abort signal set by enrichers (sequential — safe to read now)
 		if err, ok := AbortError(c); ok {
-			response.ErrorResponse(c, response.CodeInternalServer, err)
+			response.ErrorResponse(c, apperr.CodeInternalServer, err)
 			c.Abort()
 		}
 	}

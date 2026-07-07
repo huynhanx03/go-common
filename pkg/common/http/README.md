@@ -13,17 +13,19 @@ pkg/common/http/
 │   ├── circuit_breaker.go# Circuit breaker (503 on open)
 │   ├── cors.go           # CORS headers
 │   ├── recovery.go       # Panic recovery → 500
+│   ├── body_limit.go     # Request body size cap → 413
 │   └── compose.go        # Middleware composition helpers
 ├── handler/
-│   ├── wrapper.go        # Generic handler wrapper (parse → execute → respond)
+│   ├── wrapper.go        # Wrap / WrapNoReq (parse → execute → respond)
 │   └── base.go           # Base handler struct
 ├── request/
 │   ├── parse.go          # Generic request parsing + validation
 │   ├── retry.go          # Generic retry with backoff
 │   └── fanout.go         # Concurrent fan-out execution
 ├── response/
-│   ├── wrapper.go        # Standardized JSON responses
-│   ├── codes.go          # Business error codes → HTTP status mapping
+│   ├── wrapper.go        # Standardized JSON responses (+ cid on errors)
+│   ├── reply.go          # Created / Updated / Deleted / Paginated overrides
+│   ├── codes.go          # Code ranges → HTTP status mapping
 │   ├── messages.go       # Default messages per code
 │   └── merge.go          # Map/struct merge strategies
 ├── validation/
@@ -105,6 +107,15 @@ Catches panics, logs stack trace, returns `500` with standardized error response
 r.Use(middlewares.RecoveryMiddleware)
 ```
 
+### Body Limit
+
+Caps request body size so one oversized request cannot exhaust memory. When
+exceeded, the client gets `413` with code `40005`.
+
+```go
+r.Use(middlewares.BodyLimit(0)) // 0 → DefaultBodyLimit (1 MiB)
+```
+
 ### Compose
 
 Chain multiple middlewares into a single handler or compose them for route registration.
@@ -127,17 +138,82 @@ r.GET("/path", middlewares.ComposeHandlers(
 
 ## Handler Wrapper
 
-Generic handler that auto-parses requests, validates, executes business logic, and returns standardized responses.
+Generic handlers that auto-parse, validate, execute, and render — routes stay
+one line, handlers contain only business logic.
 
 ```go
-// Define a typed handler
-func CreateUser(ctx context.Context, req *CreateUserRequest) (*UserResponse, error) {
-    // business logic
+r.GET ("/stats",     handler.WrapNoReq(h.Stats))   // no DTO at all
+r.GET ("/users/:id", handler.Wrap(h.GetUser))      // :id lives in the DTO
+r.POST("/users",     handler.Wrap(h.CreateUser))   // 201 via response.Created
+r.GET ("/users",     handler.Wrap(h.ListUsers))    // pagination via response.Paginated
+```
+
+One struct describes the endpoint's full input — URI, query, and body bind
+into it (in that order; use `validate` tags, not `binding`, since URI/query
+bind errors are non-fatal):
+
+```go
+type UpdateUserReq struct {
+    ID   string `uri:"id" validate:"required"`
+    Name string `json:"name" validate:"required,min=2"`
+}
+```
+
+Plain results render as `200`/`20000`. Return `*response.Reply` to override:
+
+```go
+func (h *H) Stats(ctx context.Context) (*StatsRes, error)                      // bare GET: zero DTO
+
+func (h *H) CreateUser(ctx context.Context, req *CreateUserReq) (*response.Reply, error) {
+    u, err := h.svc.Create(ctx, req)
+    if err != nil {
+        return nil, err                  // AppError anywhere in the chain → its code + status
+    }
+    return response.Created(u), nil      // HTTP 201, code 20001
 }
 
-// Register with Gin
-r.POST("/users", handler.Wrap(CreateUser))
+func (h *H) ListUsers(ctx context.Context, req *ListUsersReq) (*response.Reply, error) {
+    items, meta, err := h.svc.List(ctx, req) // meta from dto.CalculatePagination
+    if err != nil {
+        return nil, err
+    }
+    return response.Paginated(items, meta), nil
+}
 ```
+
+The full CRUD story — the common case costs nothing, the rest is one word:
+
+```go
+return response.Created(u), nil              // POST        → 201, 20001
+return user, nil                             // GET         → 200, 20000
+return response.Paginated(items, meta), nil  // GET list    → 200 + pagination
+return response.Updated(u), nil              // PUT/PATCH   → 200, 20002
+return response.Deleted(nil), nil            // DELETE      → 200, 20003
+```
+
+Every error is attached to the Gin context (`c.Error`), so the request logger
+records the full cause chain under the request's cid — the client only ever
+sees `code + message + cid`.
+
+## Error Handling
+
+**Map an error once, where it is born; every layer above passes it through.**
+
+- Ent repos: `ent.MapEntError(err, "user")`
+- Business rules: `apperr.New(CodeEmailTaken, "email already exists", nil)`
+- Other sources (redis, external APIs): the entity factory below
+- Service layers in between: `return err`, or `fmt.Errorf("context: %w", err)` —
+  `errors.As` in the response layer still finds the AppError
+
+```go
+var errUser = apperr.For("user") // once per service file
+
+return nil, errUser.NotFound(err)      // 44000, "user not found"
+return nil, errUser.CreateFailed(err)  // 50001, "failed to create user"
+```
+
+Anything without an AppError in its chain renders as a generic `500` — internal
+error text never reaches the client.
 
 ## Request Utilities
 
@@ -189,28 +265,57 @@ val, err := request.FanoutFirst[UserData](ctx, fn1, fn2, fn3)
 }
 ```
 
-With pagination:
+With pagination (from `response.Paginated` + `dto.CalculatePagination`):
 ```json
 {
     "code": 20000,
     "message": "Success",
     "data": [ ... ],
-    "pagination": { "page": 1, "page_size": 20, "total": 100, "total_pages": 5 }
+    "pagination": { "current_page": 1, "page_size": 20, "total_pages": 5, "total_items": 100, "has_next": true, "has_prev": false }
+}
+```
+
+Errors carry the request's correlation ID, so a client-side error report can
+be matched to server logs directly (`grep` the cid):
+
+```json
+{
+    "code": 44100,
+    "message": "user not found",
+    "data": null,
+    "cid": "0197f6f2-6a3e-7cc0-..."
 }
 ```
 
 ### Business Codes
 
+Codes live in `apperr` (the contract package); `response` only maps them to
+HTTP statuses. The code is what clients branch on — the message is a human
+hint, never parsed.
+
 | Range | Category | Example |
 |-------|----------|---------|
 | 20000–29999 | Success | `20000` Success, `20001` Created |
-| 40000–40999 | Client error | `40000` Invalid params, `40001` Validation failed |
+| 40000–40999 | Client error | `40000` Invalid params, `40001` Validation failed, `40005` Body too large |
 | 41000–41999 | Auth error | `41000` Unauthorized, `41002` Token expired |
 | 42900–42999 | Rate limit | `42900` Too many requests |
 | 43000–43999 | Forbidden | `43000` Forbidden |
 | 44000–44999 | Not found | `44000` Not found |
 | 49000–49999 | Conflict | `49000` Conflict |
 | 50000–59999 | Server error | `50000` Internal error, `50001` DB error |
+
+**Convention for app-specific codes** — `[2 digits HTTP class][1 digit module][2 digits sequence]`.
+go-common owns the generic block `xx0xx`; each app allocates module digits
+(e.g. 1=user, 2=order) and its codes inherit the right HTTP status from the
+range with zero registration:
+
+```go
+const (
+    CodeUserNotFound = 44100 // 44xxx → 404
+    CodeEmailTaken   = 49101 // 49xxx → 409
+)
+return nil, apperr.New(CodeEmailTaken, "email already exists", nil)
+```
 
 ### Merge
 
@@ -223,16 +328,37 @@ merged := response.MergeMaps(response.MergeLast, map1, map2, map3)
 
 ## Validation
 
-Struct validation using `go-playground/validator` with human-readable error messages.
+Struct validation using `go-playground/validator`. Every invalid field is
+reported in one pass, so the client can render the whole form's problems from
+a single submit — `422` with the first error as message and the full list in
+`data.errors`:
+
+```json
+{
+    "code": 40001,
+    "message": "email must be a valid email",
+    "data": {
+        "errors": [
+            {"field": "email", "message": "email must be a valid email"},
+            {"field": "username", "message": "username is required"}
+        ]
+    }
+}
+```
 
 ```go
-type CreateUserRequest struct {
-    Email    string `json:"email" validate:"required,email"`
-    Username string `json:"username" validate:"required,min=3,max=50"`
-}
-
-ok, msg := validation.IsRequestValid(req) // false, "email is required"
+errs := validation.Validate(req) // nil when valid, one FieldError per problem
 ```
+
+## Performance Notes
+
+- **JSON encoder**: gin ≥ v1.9 swaps its JSON implementation via build tag —
+  `go build -tags=sonic` is a ~2-3× serialize/deserialize win with zero code
+  changes.
+- `WrapNoReq` skips binding and validation entirely — bare GETs (health,
+  stats) cost nothing beyond the handler itself.
+- Generic wrappers mean no reflection on the hot path; the only reflection
+  (JSON field-name lookup) runs when validation already failed.
 
 ## HTTP Client Pool
 
