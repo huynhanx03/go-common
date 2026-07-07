@@ -13,7 +13,7 @@ import (
 // AuthorizationEnforcer abstracts policy evaluation (e.g. a Casbin-backed
 // service). Applications implement this against their own policy storage.
 type AuthorizationEnforcer interface {
-	Enforce(ctx context.Context, userID int, resource, action string) (bool, error)
+	Enforce(ctx context.Context, userID string, resource, action string) (bool, error)
 }
 
 // AuthorizationChecker checks route access through an AuthorizationEnforcer.
@@ -29,21 +29,21 @@ func (pc *AuthorizationChecker) RequirePermission(resourceKey string, requiredAc
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
 
-		userID, ok := ctx.Value(constraints.ContextKeyUserID).(int)
+		userID, ok := ctx.Value(constraints.ContextKeyUserID).(string)
 		if !ok {
-			response.ErrorResponse(c, response.CodeUnauthorized, apperr.New(response.CodeUnauthorized, "user not authenticated", nil))
+			response.ErrorResponse(c, apperr.CodeUnauthorized, apperr.New(apperr.CodeUnauthorized, "user not authenticated", nil))
 			c.Abort()
 			return
 		}
 
 		allowed, err := pc.enforcer.Enforce(ctx, userID, resourceKey, requiredAction)
 		if err != nil {
-			response.ErrorResponse(c, response.CodeForbidden, apperr.New(response.CodeForbidden, "failed to check permissions", err))
+			response.ErrorResponse(c, apperr.CodeForbidden, apperr.New(apperr.CodeForbidden, "failed to check permissions", err))
 			c.Abort()
 			return
 		}
 		if !allowed {
-			response.ErrorResponse(c, response.CodeForbidden, apperr.New(response.CodeForbidden, "permission denied", nil))
+			response.ErrorResponse(c, apperr.CodeForbidden, apperr.New(apperr.CodeForbidden, "permission denied", nil))
 			c.Abort()
 			return
 		}

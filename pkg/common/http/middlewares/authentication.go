@@ -57,14 +57,14 @@ func Authentication(publicKey interface{}) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader(constraints.HeaderAuthorization)
 		if authHeader == "" {
-			response.ErrorResponse(c, response.CodeUnauthorized, apperr.New(response.CodeUnauthorized, "missing authorization header", nil))
+			response.ErrorResponse(c, apperr.CodeUnauthorized, apperr.New(apperr.CodeUnauthorized, "missing authorization header", nil))
 			c.Abort()
 			return
 		}
 
 		parts := strings.Split(authHeader, " ")
 		if len(parts) != 2 || parts[0] != constraints.TokenTypeBearer {
-			response.ErrorResponse(c, response.CodeUnauthorized, apperr.New(response.CodeUnauthorized, "invalid authorization header format", nil))
+			response.ErrorResponse(c, apperr.CodeUnauthorized, apperr.New(apperr.CodeUnauthorized, "invalid authorization header format", nil))
 			c.Abort()
 			return
 		}
@@ -80,7 +80,7 @@ func Authentication(publicKey interface{}) gin.HandlerFunc {
 		})
 
 		if err != nil || !token.Valid {
-			response.ErrorResponse(c, response.CodeUnauthorized, apperr.New(response.CodeUnauthorized, "invalid or expired token", nil))
+			response.ErrorResponse(c, apperr.CodeUnauthorized, apperr.New(apperr.CodeUnauthorized, "invalid or expired token", nil))
 			c.Abort()
 			return
 		}
@@ -92,7 +92,7 @@ func Authentication(publicKey interface{}) gin.HandlerFunc {
 			ctx = context.WithValue(ctx, constraints.ContextKeyUsername, claims.Username)
 			c.Request = c.Request.WithContext(ctx)
 		} else {
-			response.ErrorResponse(c, response.CodeUnauthorized, apperr.New(response.CodeUnauthorized, "invalid token claims", nil))
+			response.ErrorResponse(c, apperr.CodeUnauthorized, apperr.New(apperr.CodeUnauthorized, "invalid token claims", nil))
 			c.Abort()
 			return
 		}

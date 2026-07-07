@@ -31,8 +31,8 @@ func RecoveryMiddleware(c *gin.Context) {
 			)
 
 			// Return standardized error response
-			response.ErrorResponse(c, response.CodeInternalServer, apperr.New(
-				response.CodeInternalServer,
+			response.ErrorResponse(c, apperr.CodeInternalServer, apperr.New(
+				apperr.CodeInternalServer,
 				"Internal Server Error",
 				appErr,
 			))

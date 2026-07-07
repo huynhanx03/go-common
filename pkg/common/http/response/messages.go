@@ -1,40 +1,44 @@
 package response
 
-// Msg maps codes to default messages
+import "github.com/huynhanx03/go-common/pkg/common/apperr"
+
+// Msg maps codes to default messages, used when an AppError carries no
+// specific message of its own.
 var Msg = map[int]string{
 	// Success
-	CodeSuccess:   "Success",
-	CodeCreated:   "Resource created successfully",
-	CodeUpdated:   "Resource updated successfully",
-	CodeDeleted:   "Resource deleted successfully",
-	CodeRetrieved: "Resource retrieved successfully",
+	apperr.CodeSuccess:   "Success",
+	apperr.CodeCreated:   "Resource created successfully",
+	apperr.CodeUpdated:   "Resource updated successfully",
+	apperr.CodeDeleted:   "Resource deleted successfully",
+	apperr.CodeRetrieved: "Resource retrieved successfully",
 
 	// Client errors
-	CodeParamInvalid:     "Invalid parameters",
-	CodeValidationFailed: "Validation failed",
-	CodeBadRequest:       "Bad request",
-	CodeInvalidID:        "Invalid ID format",
+	apperr.CodeParamInvalid:     "Invalid parameters",
+	apperr.CodeValidationFailed: "Validation failed",
+	apperr.CodeBadRequest:       "Bad request",
+	apperr.CodeInvalidID:        "Invalid ID format",
+	apperr.CodeBodyTooLarge:     "Request body too large",
 
 	// Authentication/Authorization
-	CodeUnauthorized:    "Unauthorized",
-	CodeInvalidToken:    "Invalid token",
-	CodeTokenExpired:    "Token expired",
-	CodeInvalidPassword: "Invalid password",
-	CodeAccountNotFound: "Account not found",
-	CodeForbidden:       "Forbidden",
+	apperr.CodeUnauthorized:    "Unauthorized",
+	apperr.CodeInvalidToken:    "Invalid token",
+	apperr.CodeTokenExpired:    "Token expired",
+	apperr.CodeInvalidPassword: "Invalid password",
+	apperr.CodeAccountNotFound: "Account not found",
+	apperr.CodeForbidden:       "Forbidden",
 
 	// Not found
-	CodeNotFound: "Resource not found",
+	apperr.CodeNotFound: "Resource not found",
 
 	// Rate limiting
-	CodeTooManyRequests: "Too many requests",
+	apperr.CodeTooManyRequests: "Too many requests",
 
 	// Conflict
-	CodeConflict: "Conflict",
+	apperr.CodeConflict: "Conflict",
 
 	// Server errors
-	CodeInternalServer: "Internal server error",
-	CodeDatabaseError:  "Database error",
-	CodeMongoDBError:   "MongoDB error",
-	CodeRedisError:     "Redis error",
+	apperr.CodeInternalServer: "Internal server error",
+	apperr.CodeDatabaseError:  "Database error",
+	apperr.CodeMongoDBError:   "MongoDB error",
+	apperr.CodeRedisError:     "Redis error",
 }

@@ -61,8 +61,8 @@ func RequestLogger(rootLogger *zap.Logger) gin.HandlerFunc {
 			fields = append(fields, zap.String("query", redactQuery(query)))
 		}
 
-		if userID, ok := c.Request.Context().Value(constraints.ContextKeyUserID).(int); ok {
-			fields = append(fields, zap.Int("user_id", userID))
+		if userID, ok := c.Request.Context().Value(constraints.ContextKeyUserID).(string); ok && userID != "" {
+			fields = append(fields, zap.String("user_id", userID))
 		}
 
 		// Errors attached by handlers via c.Error(err) — without this, a 500

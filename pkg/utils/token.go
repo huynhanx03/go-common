@@ -24,7 +24,7 @@ const (
 // Claims extends standard jwt.Claims
 type Claims struct {
 	jwt.RegisteredClaims
-	UserID   int       `json:"sub_int"`
+	UserID   string    `json:"user_id"`
 	Username string    `json:"username"`
 	Type     TokenType `json:"type"`
 }
@@ -32,7 +32,7 @@ type Claims struct {
 // GenerateToken generates a JWT token using RS256
 func GenerateToken(
 	privateKey *rsa.PrivateKey,
-	userID int,
+	userID string,
 	username string,
 	tokenType TokenType,
 ) (string, error) {

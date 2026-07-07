@@ -136,8 +136,8 @@ func RateLimit(cfg RateLimitConfig) gin.HandlerFunc {
 		if !allowed {
 			retryAfter := cfg.Window.Seconds()
 			c.Header(headerRetryAfter, fmt.Sprintf("%.0f", retryAfter))
-			response.ErrorResponse(c, response.CodeTooManyRequests, apperr.New(
-				response.CodeTooManyRequests,
+			response.ErrorResponse(c, apperr.CodeTooManyRequests, apperr.New(
+				apperr.CodeTooManyRequests,
 				"rate limit exceeded",
 				nil,
 			))

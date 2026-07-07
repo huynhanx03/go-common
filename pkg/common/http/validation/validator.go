@@ -10,39 +10,55 @@ import (
 
 var validate = validator.New()
 
-// IsRequestValid validates a request object
-func IsRequestValid(obj any) (bool, string) {
+// FieldError describes one invalid field, ready to render to the client.
+type FieldError struct {
+	Field   string `json:"field"`
+	Message string `json:"message"`
+}
+
+// Validate checks a request object and returns every invalid field, so the
+// client can show the whole form's problems from a single submit. A nil
+// result means the object is valid.
+func Validate(obj any) []FieldError {
 	err := validate.Struct(obj)
-	if err != nil {
-		if errs, ok := err.(validator.ValidationErrors); ok {
-			fe := errs[0]
-			field := jsonFieldName(obj, fe.Field())
-			if field == "" {
-				field = strings.ToLower(fe.Field())
-			}
-			field = strings.Split(field, "[")[0]
-
-			var message string
-			switch fe.Tag() {
-			case "required":
-				message = fmt.Sprintf("%s is required", field)
-			case "min":
-				message = fmt.Sprintf("%s must be at least %s characters", field, fe.Param())
-			case "max":
-				message = fmt.Sprintf("%s must not exceed %s characters", field, fe.Param())
-			case "email":
-				message = fmt.Sprintf("%s must be a valid email", field)
-			case "oneof":
-				message = fmt.Sprintf("%s must be one of: %s", field, fe.Param())
-			default:
-				message = fmt.Sprintf("%s is invalid (%s)", field, fe.Tag())
-			}
-
-			return false, message
-		}
-		return false, err.Error()
+	if err == nil {
+		return nil
 	}
-	return true, ""
+
+	errs, ok := err.(validator.ValidationErrors)
+	if !ok {
+		return []FieldError{{Field: "", Message: err.Error()}}
+	}
+
+	fields := make([]FieldError, 0, len(errs))
+	for _, fe := range errs {
+		field := jsonFieldName(obj, fe.Field())
+		if field == "" {
+			field = strings.ToLower(fe.Field())
+		}
+		field = strings.Split(field, "[")[0]
+
+		fields = append(fields, FieldError{Field: field, Message: fieldMessage(field, fe)})
+	}
+	return fields
+}
+
+// fieldMessage renders a human-readable message for one validation failure.
+func fieldMessage(field string, fe validator.FieldError) string {
+	switch fe.Tag() {
+	case "required":
+		return fmt.Sprintf("%s is required", field)
+	case "min":
+		return fmt.Sprintf("%s must be at least %s characters", field, fe.Param())
+	case "max":
+		return fmt.Sprintf("%s must not exceed %s characters", field, fe.Param())
+	case "email":
+		return fmt.Sprintf("%s must be a valid email", field)
+	case "oneof":
+		return fmt.Sprintf("%s must be one of: %s", field, fe.Param())
+	default:
+		return fmt.Sprintf("%s is invalid (%s)", field, fe.Tag())
+	}
 }
 
 // jsonFieldName returns the JSON field name for a given field

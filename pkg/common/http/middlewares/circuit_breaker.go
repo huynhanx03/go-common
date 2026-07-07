@@ -19,8 +19,8 @@ const (
 func CircuitBreakerMiddleware(cb *algorithm.CircuitBreaker) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if err := cb.Allow(); err != nil {
-			response.ErrorResponse(c, response.CodeInternalServer, apperr.New(
-				response.CodeInternalServer,
+			response.ErrorResponse(c, apperr.CodeInternalServer, apperr.New(
+				apperr.CodeInternalServer,
 				"service temporarily unavailable",
 				err,
 			))
