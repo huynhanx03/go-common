@@ -6,8 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/huynhanx03/go-common/pkg/algorithm"
-	"github.com/huynhanx03/go-common/pkg/cid"
+	httpRequest "github.com/huynhanx03/go-common/pkg/common/http/request"
 )
 
 type HTTPClientPool struct {
@@ -34,6 +33,22 @@ const (
 	defaultCacheExpiration = 5 * time.Minute
 )
 
+type RetryPolicy = httpRequest.RetryPolicy
+type Attempt = httpRequest.Attempt
+
+// DefaultRetryPolicy retries transient admission-control and upstream failures
+// for methods that are safe to replay.
+func DefaultRetryPolicy() RetryPolicy {
+	return RetryPolicy{
+		MaxRetries:       2,
+		InitialBackoff:   time.Second,
+		MaxBackoff:       30 * time.Second,
+		JitterFraction:   0.2,
+		RetryStatusCodes: []int{http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout},
+		RetryMethods:     []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodDelete, http.MethodOptions},
+	}
+}
+
 // DefaultHTTPConfig returns default configuration for HTTP client pool
 func DefaultHTTPConfig() *HTTPClientConfig {
 	return &HTTPClientConfig{
@@ -54,9 +69,9 @@ func NewHTTPClientPool(config *HTTPClientConfig) *HTTPClientPool {
 
 	client := &http.Client{
 		Timeout: config.Timeout,
-		// cid.RoundTripper stamps the context's correlation ID onto every
+		// CorrelationRoundTripper stamps the context's correlation ID onto every
 		// outgoing request, so calls to other services keep the same cid.
-		Transport: cid.RoundTripper(&http.Transport{
+		Transport: httpRequest.CorrelationRoundTripper(&http.Transport{
 			MaxIdleConns:        config.MaxIdleConns,
 			MaxIdleConnsPerHost: config.MaxConnsPerHost,
 			IdleConnTimeout:     config.IdleConnTimeout,
@@ -69,46 +84,30 @@ func NewHTTPClientPool(config *HTTPClientConfig) *HTTPClientPool {
 	}
 }
 
-// RequestWithRetry performs an HTTP request with retry logic
-func (p *HTTPClientPool) RequestWithRetry(ctx context.Context, req *http.Request, maxRetries int) (*http.Response, error) {
-	var lastErr error
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-			resp, err := p.client.Do(req)
-
-			// Success case: No error and status is OK
-			if err == nil {
-				if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= http.StatusInternalServerError {
-					// Need retry
-					resp.Body.Close() // Close body to prevent leak before retry
-				} else {
-					// Success
-					return resp, nil
-				}
-			}
-
-			if err != nil {
-				lastErr = err
-			}
-
-			// Calculate backoff using exponential backoff with jitter
-			backoff := algorithm.NewExponentialBackoff(1*time.Second, 30*time.Second, 2.0)
-			waitDuration := algorithm.NewJitterBackoff(backoff).Delay(attempt)
-
-			timer := time.NewTimer(waitDuration)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return nil, ctx.Err()
-			case <-timer.C:
-				continue
-			}
-		}
+// Do executes through the pool's shared client and returns safe per-attempt
+// metadata. The policy remains explicit at the call site.
+func (p *HTTPClientPool) Do(
+	ctx context.Context,
+	request *http.Request,
+	policy RetryPolicy,
+) (*http.Response, []Attempt, error) {
+	if p == nil {
+		return nil, nil, httpRequest.ErrInvalidRequest
 	}
-	return nil, lastErr
+	return httpRequest.Do(ctx, p.client, request, policy)
+}
+
+// RequestWithRetry is the compatibility convenience API. maxRetries counts
+// attempts after the initial request, so zero still performs one request.
+func (p *HTTPClientPool) RequestWithRetry(
+	ctx context.Context,
+	request *http.Request,
+	maxRetries int,
+) (*http.Response, error) {
+	policy := DefaultRetryPolicy()
+	policy.MaxRetries = maxRetries
+	response, _, err := p.Do(ctx, request, policy)
+	return response, err
 }
 
 // GetFromCache retrieves data from cache if available

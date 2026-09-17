@@ -31,21 +31,21 @@ func appendRecord(dst []byte, r *Record) []byte {
 	return dst
 }
 
-// decodeRecord decodes a single Record from data, returning bytes consumed.
-func decodeRecord(data []byte) (Record, int, error) {
+// decodeRecord decodes a single Record within a batch-wide header budget.
+func decodeRecord(data []byte, remainingHeaderBudget int) (Record, int, int, error) {
 	if len(data) == 0 {
-		return Record{}, 0, ErrCorruptRecord
+		return Record{}, 0, 0, ErrCorruptRecord
 	}
 
 	recLen, n := binary.Varint(data)
 	if n <= 0 || recLen < 0 {
-		return Record{}, 0, ErrCorruptRecord
+		return Record{}, 0, 0, ErrCorruptRecord
 	}
 
-	totalConsumed := n + int(recLen)
-	if totalConsumed > len(data) {
-		return Record{}, 0, ErrCorruptRecord
+	if recLen > int64(len(data)-n) {
+		return Record{}, 0, 0, ErrCorruptRecord
 	}
+	totalConsumed := n + int(recLen)
 
 	buf := data[n : n+int(recLen)]
 	off := 0
@@ -54,42 +54,48 @@ func decodeRecord(data []byte) (Record, int, error) {
 
 	r.TimestampDelta, off, ok = readVarint(buf, off)
 	if !ok {
-		return Record{}, 0, ErrCorruptRecord
+		return Record{}, 0, 0, ErrCorruptRecord
 	}
 	r.OffsetDelta, off, ok = readVarint(buf, off)
 	if !ok {
-		return Record{}, 0, ErrCorruptRecord
+		return Record{}, 0, 0, ErrCorruptRecord
 	}
 	r.Key, off, ok = readVarintBytes(buf, off)
 	if !ok {
-		return Record{}, 0, ErrCorruptRecord
+		return Record{}, 0, 0, ErrCorruptRecord
 	}
 	r.Value, off, ok = readVarintBytes(buf, off)
 	if !ok {
-		return Record{}, 0, ErrCorruptRecord
+		return Record{}, 0, 0, ErrCorruptRecord
 	}
 
 	headerCount, newOff, hOk := readVarint(buf, off)
-	if !hOk || headerCount < 0 || headerCount > maxHeadersPerRecord {
-		return Record{}, 0, ErrCorruptRecord
+	if !hOk ||
+		headerCount < 0 ||
+		headerCount > maxHeadersPerRecord ||
+		headerCount > int64(remainingHeaderBudget) {
+		return Record{}, 0, 0, ErrCorruptRecord
 	}
 	off = newOff
 
 	if headerCount > 0 {
-		r.Headers = make([]Header, headerCount)
+		r.Headers = make([]Header, int(headerCount))
 		for i := range r.Headers {
 			r.Headers[i].Key, off, ok = readVarintBytes(buf, off)
 			if !ok {
-				return Record{}, 0, ErrCorruptRecord
+				return Record{}, 0, 0, ErrCorruptRecord
 			}
 			r.Headers[i].Value, off, ok = readVarintBytes(buf, off)
 			if !ok {
-				return Record{}, 0, ErrCorruptRecord
+				return Record{}, 0, 0, ErrCorruptRecord
 			}
 		}
 	}
+	if off != len(buf) {
+		return Record{}, 0, 0, ErrCorruptRecord
+	}
 
-	return r, totalConsumed, nil
+	return r, totalConsumed, int(headerCount), nil
 }
 
 // --- varint helpers ---
@@ -125,12 +131,15 @@ func readVarintBytes(data []byte, off int) ([]byte, int, bool) {
 		return nil, off, false
 	}
 	if length < 0 {
+		if length != -1 {
+			return nil, off, false
+		}
 		return nil, newOff, true // null
 	}
-	end := newOff + int(length)
-	if end > len(data) {
+	if length > int64(len(data)-newOff) {
 		return nil, off, false
 	}
+	end := newOff + int(length)
 	return data[newOff:end], end, true
 }
 

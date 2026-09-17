@@ -14,6 +14,12 @@ import (
 // clean miss (false, nil error); decode failures and engine errors are errors.
 func GetRemote[T any](ctx context.Context, c CacheEngine, key string) (T, bool, error) {
 	var zero T
+	if ctx == nil || c == nil || key == "" || len(key) > 1024 {
+		return zero, false, ErrInvalidConfig
+	}
+	if err := ctx.Err(); err != nil {
+		return zero, false, err
+	}
 
 	data, exists, err := c.Get(ctx, key)
 	if !exists {
@@ -32,11 +38,23 @@ func GetRemote[T any](ctx context.Context, c CacheEngine, key string) (T, bool, 
 
 // SetRemote stores a value in remote cache with TTL.
 func SetRemote[T any](ctx context.Context, c CacheEngine, key string, value T, ttl time.Duration) error {
+	if ctx == nil || c == nil || key == "" || len(key) > 1024 || ttl <= 0 {
+		return ErrInvalidConfig
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return c.Set(ctx, key, value, ttl)
 }
 
 // DeleteRemote removes a key from remote cache.
 func DeleteRemote(ctx context.Context, c CacheEngine, key string) error {
+	if ctx == nil || c == nil || key == "" || len(key) > 1024 {
+		return ErrInvalidConfig
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return c.Delete(ctx, key)
 }
 
@@ -64,6 +82,18 @@ func FetchRemote[T any](
 	fn func(ctx context.Context) (T, error),
 ) (T, error) {
 	var zero T
+	if ctx == nil ||
+		c == nil ||
+		sf == nil ||
+		key == "" ||
+		len(key) > 1024 ||
+		ttl <= 0 ||
+		fn == nil {
+		return zero, ErrInvalidConfig
+	}
+	if err := ctx.Err(); err != nil {
+		return zero, err
+	}
 
 	load := func(ctx context.Context) (T, error) {
 		start := time.Now()
@@ -81,11 +111,15 @@ func FetchRemote[T any](
 
 	if env, ok, _ := GetRemote[envelope[T]](ctx, c, key); ok {
 		if env.shouldRefresh() {
-			// Detach from the request's cancellation but keep its values (cid…).
-			bgCtx := context.WithoutCancel(ctx)
-			refreshAsync(sf, key, func() (T, error) {
-				return load(bgCtx)
-			})
+			// Detach client cancellation while retaining correlation values and
+			// the caller's dependency deadline.
+			refreshContext, cancel := detachedContext(ctx)
+			if !refreshAsync(sf, key, func() (T, error) {
+				defer cancel()
+				return load(refreshContext)
+			}) {
+				cancel()
+			}
 		}
 		return env.Value, nil
 	}
@@ -93,7 +127,7 @@ func FetchRemote[T any](
 		return zero, ErrNotFound
 	}
 
-	return doTyped(sf, key, func() (T, error) {
+	return doTypedContext(ctx, sf, key, func() (T, error) {
 		if env, ok, _ := GetRemote[envelope[T]](ctx, c, key); ok {
 			return env.Value, nil
 		}

@@ -48,7 +48,13 @@ func (lz4Compressor) Compress(dst, src []byte) ([]byte, error) {
 }
 
 func (lz4Compressor) Decompress(dst, src []byte) ([]byte, error) {
+	if len(src) == 0 || len(src) > maxEncodedBatchBytes {
+		return nil, ErrCorruptBatch
+	}
 	initSize := len(src) * decompressInitMultiplier
+	if initSize < 64 {
+		initSize = 64
+	}
 	if initSize > maxDecompressSize {
 		initSize = maxDecompressSize
 	}

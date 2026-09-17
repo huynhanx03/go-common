@@ -11,4 +11,8 @@ var (
 
 	// ErrConnectionFailed is returned when the connection to Redis fails.
 	ErrConnectionFailed = errors.New("failed to connect to Redis")
+
+	ErrInvalidConfig = errors.New("redis: invalid configuration")
+	ErrScanLimit     = errors.New("redis: scan result limit exceeded")
+	ErrBatchTooLarge = errors.New("redis: batch too large")
 )

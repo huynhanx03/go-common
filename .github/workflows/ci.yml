@@ -1,0 +1,201 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_integration:
+        description: Run container-backed integration tests
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOFLAGS: -mod=readonly
+
+jobs:
+  quality:
+    name: Format, vet, contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod download
+      - name: Verify module graph
+        run: |
+          go mod verify
+          go mod tidy -diff
+      - name: Validate workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+      - name: Verify formatting
+        run: make format-check
+      - name: Vet
+        run: go vet ./...
+      - name: Verify documentation and examples
+        run: ./scripts/verify-docs.sh
+
+  unit:
+    name: Unit tests and coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod download
+      - name: Test with coverage threshold
+        env:
+          COVER_PROFILE: coverage.out
+        run: ./scripts/verify-coverage.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: go-common-coverage-${{ github.sha }}
+          path: coverage.out
+          if-no-files-found: error
+          retention-days: 30
+
+  race:
+    name: Race / ${{ matrix.package }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - ./pkg/common/lifecycle
+          - ./pkg/common/health
+          - ./pkg/common/websocket
+          - ./pkg/common/cache/...
+          - ./pkg/common/workerpool
+          - ./pkg/logger
+          - ./pkg/mq/batcher
+          - ./pkg/mq/forge
+          - ./pkg/mq/outbox/...
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod download
+      - run: go test -race "${{ matrix.package }}" -count=1
+
+  fuzz-seeds:
+    name: Fuzz seed corpus
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod download
+      - run: make fuzz-seeds
+
+  vulnerability:
+    name: Reachable vulnerabilities
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod download
+      - name: Run govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+
+  benchmarks:
+    name: Benchmark baseline
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod download
+      - name: Capture benchmark matrix
+        env:
+          BENCH_COUNT: 5
+        run: ./scripts/run-benchmarks.sh | tee benchmark.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: go-common-benchmark-${{ github.sha }}
+          path: benchmark.txt
+          if-no-files-found: error
+          retention-days: 90
+
+  integration:
+    name: Container integration tests
+    if: github.event_name == 'workflow_dispatch' && inputs.run_integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod download
+      - run: ./scripts/test-integration.sh
+
+  gate:
+    name: Required gate
+    if: always()
+    needs: [quality, unit, race, fuzz-seeds, vulnerability]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every mandatory job to pass
+        env:
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          UNIT_RESULT: ${{ needs.unit.result }}
+          RACE_RESULT: ${{ needs.race.result }}
+          FUZZ_RESULT: ${{ needs.fuzz-seeds.result }}
+          VULNERABILITY_RESULT: ${{ needs.vulnerability.result }}
+        run: |
+          for result in \
+            "$QUALITY_RESULT" \
+            "$UNIT_RESULT" \
+            "$RACE_RESULT" \
+            "$FUZZ_RESULT" \
+            "$VULNERABILITY_RESULT"; do
+            if [[ "$result" != success ]]; then
+              echo "::error::A required go-common job did not pass (result=$result)."
+              exit 1
+            fi
+          done

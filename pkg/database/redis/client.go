@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -25,19 +26,29 @@ const (
 	defaultMaxRetries      = 3
 	defaultMinRetryBackoff = 300 // millis
 	defaultMaxRetryBackoff = 500 // millis
+	scanCount              = 500
+	maxScannedKeys         = 100_000
+	maxBatchCommands       = 10_000
+	deleteBatchSize        = 500
 )
 
 type RedisEngine struct {
-	client  redisV9.UniversalClient
-	config  *settings.Redis
-	rwMutex sync.Mutex
+	client    redisV9.UniversalClient
+	config    *settings.Redis
+	closeOnce sync.Once
 }
 
 var _ cache.CacheEngine = (*RedisEngine)(nil)
 
 // connect initializes the Redis client
 func (r *RedisEngine) connect() error {
+	if r == nil || r.config == nil {
+		return ErrInvalidConfig
+	}
 	r.setDefaultConfig()
+	if err := r.config.Validate(); err != nil {
+		return errors.Join(ErrInvalidConfig, err)
+	}
 
 	r.client = redisV9.NewUniversalClient(&redisV9.UniversalOptions{
 		Addrs:           r.config.Addrs,
@@ -59,7 +70,8 @@ func (r *RedisEngine) connect() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := r.client.Ping(ctx).Err(); err != nil {
-		return fmt.Errorf("%w: %v", ErrPingFailed, err)
+		_ = r.client.Close()
+		return errors.Join(ErrPingFailed, fmt.Errorf("ping redis: %w", err))
 	}
 
 	return nil
@@ -71,7 +83,7 @@ func (r *RedisEngine) setDefaultConfig() {
 		r.config.PoolSize = defaultPoolSize
 	}
 	if r.config.MinIdleConns == 0 {
-		r.config.MinIdleConns = defaultMinIdleConns
+		r.config.MinIdleConns = min(defaultMinIdleConns, r.config.PoolSize)
 	}
 	if r.config.PoolTimeout == 0 {
 		r.config.PoolTimeout = defaultPoolTimeout
@@ -100,7 +112,7 @@ func (r *RedisEngine) setDefaultConfig() {
 func (r *RedisEngine) Get(ctx context.Context, key string) ([]byte, bool, error) {
 	byteValue, err := r.client.Get(ctx, key).Bytes()
 	if err == redisV9.Nil {
-		return nil, false, ErrKeyNotFound
+		return nil, false, errors.Join(ErrKeyNotFound, cache.ErrKeyNotFound)
 	}
 	if err != nil {
 		return nil, false, err
@@ -110,33 +122,29 @@ func (r *RedisEngine) Get(ctx context.Context, key string) ([]byte, bool, error)
 
 // Delete key
 func (r *RedisEngine) Delete(ctx context.Context, key string) error {
-	r.rwMutex.Lock()
-	defer r.rwMutex.Unlock()
 	return r.client.Del(ctx, key).Err()
 }
 
 // InvalidatePrefix invalidates all keys with a given prefix
 func (r *RedisEngine) InvalidatePrefix(ctx context.Context, prefix string) error {
-	r.rwMutex.Lock()
-	defer r.rwMutex.Unlock()
-
-	// Caution: Keys() can be slow in production, consider SCAN or maintaining a set of keys
-	val, err := r.client.Keys(ctx, prefix+"*").Result()
+	if prefix == "" {
+		return ErrInvalidConfig
+	}
+	keys, err := r.scan(ctx, prefix+"*", maxScannedKeys)
 	if err != nil {
 		return err
 	}
-
-	if len(val) > 0 {
-		return r.client.Del(ctx, val...).Err()
+	for start := 0; start < len(keys); start += deleteBatchSize {
+		end := min(start+deleteBatchSize, len(keys))
+		if err := r.client.Unlink(ctx, keys[start:end]...).Err(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
 // Set value by key
 func (r *RedisEngine) Set(ctx context.Context, key string, value any, ttl time.Duration) error {
-	r.rwMutex.Lock()
-	defer r.rwMutex.Unlock()
-
 	byteValue, err := json.Marshal(value)
 	if err != nil {
 		return err
@@ -147,25 +155,48 @@ func (r *RedisEngine) Set(ctx context.Context, key string, value any, ttl time.D
 
 // BatchSet stores multiple values in a pipeline
 func (r *RedisEngine) BatchSet(ctx context.Context, values map[string]any, ttl time.Duration) error {
-	r.rwMutex.Lock()
-	defer r.rwMutex.Unlock()
-
-	pipe := r.client.Pipeline()
-
+	if len(values) > maxBatchCommands {
+		return ErrBatchTooLarge
+	}
+	type encodedValue struct {
+		key   string
+		value []byte
+	}
+	encoded := make([]encodedValue, 0, len(values))
 	for key, value := range values {
 		byteValue, err := json.Marshal(value)
 		if err != nil {
 			return err
 		}
-		pipe.Set(ctx, key, byteValue, ttl)
+		encoded = append(encoded, encodedValue{key: key, value: byteValue})
 	}
 
-	_, err := pipe.Exec(ctx)
-	return err
+	pipe := r.client.Pipeline()
+	commands := make([]*redisV9.StatusCmd, 0, len(encoded))
+	for _, item := range encoded {
+		commands = append(commands, pipe.Set(ctx, item.key, item.value, ttl))
+	}
+	_, execErr := pipe.Exec(ctx)
+	commandErrors := make([]error, 0, len(commands)+1)
+	if execErr != nil {
+		commandErrors = append(commandErrors, execErr)
+	}
+	for _, command := range commands {
+		if err := command.Err(); err != nil {
+			commandErrors = append(commandErrors, err)
+		}
+	}
+	return errors.Join(commandErrors...)
 }
 
 // DeleteBulk removes multiple keys from the cache
 func (r *RedisEngine) DeleteBulk(ctx context.Context, keys []string) error {
+	if len(keys) > maxBatchCommands {
+		return ErrBatchTooLarge
+	}
+	if len(keys) == 0 {
+		return nil
+	}
 	return r.client.Del(ctx, keys...).Err()
 }
 
@@ -181,15 +212,18 @@ func (r *RedisEngine) Decr(ctx context.Context, key string) (int64, error) {
 
 // GeoAdd adds geospatial locations
 func (r *RedisEngine) GeoAdd(ctx context.Context, key string, locations ...*dto.GeoLocation) error {
-	r.rwMutex.Lock()
-	defer r.rwMutex.Unlock()
-
 	if len(locations) == 0 {
 		return nil
+	}
+	if len(locations) > maxBatchCommands {
+		return ErrBatchTooLarge
 	}
 
 	redisLocations := make([]*redisV9.GeoLocation, len(locations))
 	for i, loc := range locations {
+		if loc == nil {
+			return ErrInvalidConfig
+		}
 		redisLocations[i] = &redisV9.GeoLocation{
 			Name:      loc.Member,
 			Longitude: loc.Longitude,
@@ -206,11 +240,11 @@ func (r *RedisEngine) GeoAdd(ctx context.Context, key string, locations ...*dto.
 
 // GeoRemove removes members from a geospatial index
 func (r *RedisEngine) GeoRemove(ctx context.Context, key string, members ...string) error {
-	r.rwMutex.Lock()
-	defer r.rwMutex.Unlock()
-
 	if len(members) == 0 {
 		return nil
+	}
+	if len(members) > maxBatchCommands {
+		return ErrBatchTooLarge
 	}
 
 	pipe := r.client.Pipeline()
@@ -227,9 +261,14 @@ func (r *RedisEngine) GeoRemove(ctx context.Context, key string, members ...stri
 
 // Close closes the Redis client
 func (r *RedisEngine) Close() {
-	if r.client != nil {
-		r.client.Close()
+	if r == nil {
+		return
 	}
+	r.closeOnce.Do(func() {
+		if r.client != nil {
+			_ = r.client.Close()
+		}
+	})
 }
 
 // Client returns the underlying redis client (Escape hatch)
@@ -239,9 +278,6 @@ func (r *RedisEngine) Client() redisV9.UniversalClient {
 
 // GeoRadius searches for members within a radius.
 func (r *RedisEngine) GeoRadius(ctx context.Context, key string, longitude, latitude, radius float64, unit string) ([]*dto.GeoLocation, error) {
-	r.rwMutex.Lock()
-	defer r.rwMutex.Unlock()
-
 	// Use GeoSearchLocation (modern alternative to GeoRadius)
 	res, err := r.client.GeoSearchLocation(ctx, key, &redisV9.GeoSearchLocationQuery{
 		GeoSearchQuery: redisV9.GeoSearchQuery{
@@ -289,9 +325,15 @@ func (r *RedisEngine) ZAdd(ctx context.Context, key string, members ...*dto.ZMem
 	if len(members) == 0 {
 		return nil
 	}
+	if len(members) > maxBatchCommands {
+		return ErrBatchTooLarge
+	}
 
 	redisMembers := make([]redisV9.Z, len(members))
 	for i, m := range members {
+		if m == nil {
+			return ErrInvalidConfig
+		}
 		redisMembers[i] = redisV9.Z{
 			Score:  m.Score,
 			Member: m.Member,
@@ -316,8 +358,44 @@ func (r *RedisEngine) ZRange(ctx context.Context, key string, start, stop int64)
 	return r.client.ZRange(ctx, key, start, stop).Result()
 }
 
-// Keys returns all keys matching a pattern.
-// Caution: KEYS can be slow in production; prefer SCAN for large keyspaces.
+// Keys returns a bounded SCAN result for compatibility.
 func (r *RedisEngine) Keys(ctx context.Context, pattern string) ([]string, error) {
-	return r.client.Keys(ctx, pattern).Result()
+	if pattern == "" {
+		return nil, ErrInvalidConfig
+	}
+	return r.scan(ctx, pattern, maxScannedKeys)
+}
+
+func (r *RedisEngine) scan(
+	ctx context.Context,
+	pattern string,
+	limit int,
+) ([]string, error) {
+	if ctx == nil || r == nil || r.client == nil || pattern == "" || limit <= 0 {
+		return nil, ErrInvalidConfig
+	}
+	keys := make([]string, 0, min(scanCount, limit))
+	var cursor uint64
+	for {
+		page, next, err := r.client.Scan(
+			ctx,
+			cursor,
+			pattern,
+			int64(min(scanCount, limit-len(keys))),
+		).Result()
+		if err != nil {
+			return nil, err
+		}
+		if len(keys)+len(page) > limit {
+			return nil, ErrScanLimit
+		}
+		keys = append(keys, page...)
+		cursor = next
+		if cursor == 0 {
+			return keys, nil
+		}
+		if len(keys) >= limit {
+			return nil, ErrScanLimit
+		}
+	}
 }

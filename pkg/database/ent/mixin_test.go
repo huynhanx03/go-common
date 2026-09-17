@@ -2,6 +2,8 @@ package ent
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -40,6 +42,29 @@ func withActor(t *testing.T, actor string) {
 	t.Helper()
 	SetActorResolver(func(context.Context) (string, bool) { return actor, actor != "" })
 	t.Cleanup(func() { SetActorResolver(nil) })
+}
+
+func TestActorResolverIsConcurrentSafe(t *testing.T) {
+	const goroutines = 16
+	start := make(chan struct{})
+	var wait sync.WaitGroup
+	for index := 0; index < goroutines; index++ {
+		wait.Add(1)
+		go func(set bool) {
+			defer wait.Done()
+			<-start
+			if set {
+				SetActorResolver(func(context.Context) (string, bool) {
+					return "actor", true
+				})
+				return
+			}
+			_, _ = ActorFromContext(context.Background())
+		}(index%2 == 0)
+	}
+	close(start)
+	wait.Wait()
+	SetActorResolver(nil)
 }
 
 // nextRecorder is a terminal mutator recording whether it ran.
@@ -181,6 +206,60 @@ func TestSoftDeleteInterceptorFiltersQueries(t *testing.T) {
 	}
 	if skipped.predicates != 0 {
 		t.Fatalf("predicates = %d, want 0 under SkipSoftDelete", skipped.predicates)
+	}
+}
+
+func TestAppendOnlyMixinAllowsCreateAndRejectsEveryMutableOperation(t *testing.T) {
+	hook := AppendOnlyMixin{}.Hooks()[0]
+
+	wantValue := "created"
+	createNext := &nextRecorder{}
+	gotValue, err := hook(ent.MutateFunc(func(context.Context, ent.Mutation) (ent.Value, error) {
+		createNext.called = true
+		return wantValue, nil
+	})).Mutate(
+		context.Background(),
+		&fakeMutation{op: ent.OpCreate, fields: map[string]ent.Value{}},
+	)
+	if err != nil {
+		t.Fatalf("create mutation: %v", err)
+	}
+	if !createNext.called {
+		t.Fatal("create mutation did not reach the next mutator")
+	}
+	if gotValue != wantValue {
+		t.Fatalf("create result = %v, want %v", gotValue, wantValue)
+	}
+
+	for _, test := range []struct {
+		name        string
+		operation   ent.Op
+		nilMutation bool
+	}{
+		{name: "update-many", operation: ent.OpUpdate},
+		{name: "update-one", operation: ent.OpUpdateOne},
+		{name: "delete-many", operation: ent.OpDelete},
+		{name: "delete-one", operation: ent.OpDeleteOne},
+		{name: "combined", operation: ent.OpCreate | ent.OpUpdate},
+		{name: "zero", operation: 0},
+		{name: "future", operation: ent.OpDeleteOne << 1},
+		{name: "nil", nilMutation: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var mutation ent.Mutation
+			if !test.nilMutation {
+				mutation = &fakeMutation{op: test.operation, fields: map[string]ent.Value{}}
+			}
+
+			next := &nextRecorder{}
+			_, err := hook(next).Mutate(context.Background(), mutation)
+			if !errors.Is(err, ErrAppendOnlyMutation) {
+				t.Fatalf("operation %v error = %v, want ErrAppendOnlyMutation", test.operation, err)
+			}
+			if next.called {
+				t.Fatalf("operation %v reached the next mutator", test.operation)
+			}
+		})
 	}
 }
 

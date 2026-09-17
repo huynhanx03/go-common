@@ -47,4 +47,5 @@ const (
 	CodeDatabaseError  = 50001 // Database error
 	CodeMongoDBError   = 50002 // MongoDB error
 	CodeRedisError     = 50003 // Redis error
+	CodeGatewayTimeout = 50004 // Request deadline exceeded (maps to 504)
 )

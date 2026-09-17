@@ -41,8 +41,8 @@ func (f *fakeLocal) Delete(key string) {
 	defer f.mu.Unlock()
 	delete(f.m, key)
 }
-func (f *fakeLocal) Clear()      { f.mu.Lock(); defer f.mu.Unlock(); f.m = make(map[string]any) }
-func (f *fakeLocal) Close()      {}
+func (f *fakeLocal) Clear()       { f.mu.Lock(); defer f.mu.Unlock(); f.m = make(map[string]any) }
+func (f *fakeLocal) Close()       {}
 func (f *fakeLocal) Stats() Stats { return Stats{} }
 
 var _ LocalCache[string, any] = (*fakeLocal)(nil)

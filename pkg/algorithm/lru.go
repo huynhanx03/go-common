@@ -28,7 +28,6 @@ func SelectLRUVictim(pool []LRUEntry, sampleSize int) (LRUEntry, bool) {
 		return findOldest(pool), true
 	}
 
-
 	sample := make([]LRUEntry, sampleSize)
 	for i := 0; i < sampleSize; i++ {
 		sample[i] = pool[rand.Intn(n)]

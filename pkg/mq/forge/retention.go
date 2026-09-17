@@ -25,7 +25,8 @@ func (b *Broker) retentionLoop() {
 	}
 }
 
-// runRetention collects topic snapshots under RLock, then runs retention/merge outside the lock.
+// runRetention collects topic snapshots under RLock, then runs whole-segment
+// retention outside the lock.
 func (b *Broker) runRetention() {
 	b.mu.RLock()
 	topics := make([]*Topic, 0, len(b.topics))
@@ -35,18 +36,31 @@ func (b *Broker) runRetention() {
 	b.mu.RUnlock()
 
 	for _, t := range topics {
-		if err := t.log.EnforceRetention(); err != nil {
-			b.reportRetentionError(err)
+		var retentionErr error
+		if b.config.RetentionMode == RetainByAgeAndSize {
+			retentionErr = t.log.EnforceRetention()
+		} else {
+			b.groupMu.Lock()
+			minimum, registered, err := b.offsetStore.MinimumOffset(t.name)
+			if err != nil {
+				retentionErr = err
+			} else if registered {
+				retentionErr = t.log.EnforceRetentionBefore(minimum)
+			}
+			b.groupMu.Unlock()
 		}
-		if err := t.log.MergeSegments(); err != nil {
-			b.reportRetentionError(err)
+		if retentionErr != nil {
+			b.reportRetentionError(retentionErr)
 		}
 	}
 }
 
-// reportRetentionError routes retention/merge errors to the configured callback.
+// reportRetentionError routes retention errors to the configured callback.
 func (b *Broker) reportRetentionError(err error) {
 	if b.config.OnRetentionError != nil {
+		defer func() {
+			_ = recover()
+		}()
 		b.config.OnRetentionError(err)
 	}
 }

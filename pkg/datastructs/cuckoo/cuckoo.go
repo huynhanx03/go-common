@@ -97,16 +97,16 @@ func fingerprint(h uint64) uint16 {
 // indices computes the two candidate bucket indices for a given hash and fingerprint.
 func (f *Filter) indices(h uint64, finger uint16) (uint, uint) {
 	i1 := uint(h % uint64(f.m))
-	_, hf := hash.KeyToHash(uint64(finger))
+	hf := hash.Sum128(uint64(finger)).Secondary
 	i2 := i1 ^ uint(hf%uint64(f.m))
 	return i1, i2
 }
 
 // Add adds an item to the filter.
 func (f *Filter) Add(item string) error {
-	h1, h2 := hash.KeyToHash(item)
-	fp := fingerprint(h2)
-	i1, i2 := f.indices(h1, fp)
+	pair := hash.Sum128(item)
+	fp := fingerprint(pair.Secondary)
+	i1, i2 := f.indices(pair.Primary, fp)
 
 	if f.buckets[i1].add(fp) {
 		f.count++
@@ -127,7 +127,7 @@ func (f *Filter) Add(item string) error {
 	for k := 0; k < maxKicks; k++ {
 		fp = f.buckets[i].swap(f.rnd.Intn(bucketSize), fp)
 
-		_, hf := hash.KeyToHash(uint64(fp))
+		hf := hash.Sum128(uint64(fp)).Secondary
 		i = i ^ uint(hf%uint64(f.m))
 
 		if f.buckets[i].add(fp) {
@@ -141,17 +141,17 @@ func (f *Filter) Add(item string) error {
 
 // Contains checks if the filter probably contains the item.
 func (f *Filter) Contains(item string) bool {
-	h1, h2 := hash.KeyToHash(item)
-	fp := fingerprint(h2)
-	i1, i2 := f.indices(h1, fp)
+	pair := hash.Sum128(item)
+	fp := fingerprint(pair.Secondary)
+	i1, i2 := f.indices(pair.Primary, fp)
 	return f.buckets[i1].contains(fp) || f.buckets[i2].contains(fp)
 }
 
 // Delete removes an item from the filter.
 func (f *Filter) Delete(item string) bool {
-	h1, h2 := hash.KeyToHash(item)
-	fp := fingerprint(h2)
-	i1, i2 := f.indices(h1, fp)
+	pair := hash.Sum128(item)
+	fp := fingerprint(pair.Secondary)
+	i1, i2 := f.indices(pair.Primary, fp)
 
 	if f.buckets[i1].remove(fp) {
 		f.count--

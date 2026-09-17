@@ -1,164 +1,446 @@
 package forge
 
 import (
+	"context"
+	"fmt"
+	"strconv"
 	"sync"
-
-	"github.com/huynhanx03/go-common/pkg/common/locks"
+	"time"
 )
 
-// Consumer reads records from a CommitLog with offset tracking.
-// All methods are safe for concurrent use.
-// Uses SpinLock: consumers are typically single-goroutine, low contention.
-type Consumer struct {
-	mu          sync.Locker // SpinLock — low contention, fast uncontended CAS
-	log         *CommitLog
-	group       string
-	topic       string
-	offset      uint64
-	offsetStore *OffsetStore
-	metrics     *MetricsHook
+const MaxPollRecords = 10_000
+const DefaultFetchWaitInterval = 100 * time.Millisecond
 
-	// DLQ support: optional producer to route failed messages.
-	dlq *Producer
+// Consumer owns one exclusive (group, topic) lease. Fetch advances only its
+// in-memory cursor; CommitOffset is the sole durable acknowledgment operation.
+type Consumer struct {
+	mu              sync.Mutex
+	log             *CommitLog
+	group           string
+	topic           string
+	offset          uint64
+	committedOffset uint64
+	offsetStore     *OffsetStore
+	metrics         *MetricsHook
+	dlq             *Producer
+	lease           *consumerLease
+	closed          bool
+	closeOnce       sync.Once
+	closeErr        error
+	onClose         func()
+	waitSignal      func() <-chan struct{}
+	done            chan struct{}
 }
 
-// ConsumerOption configures a Consumer.
-type ConsumerOption func(*consumerConfig)
+// FetchWait waits for at least one delivery, a topic notification, the
+// fallback interval, or context cancellation. The fallback preserves progress
+// for consumers constructed directly without a Broker.
+func (consumer *Consumer) FetchWait(
+	ctx context.Context,
+	maxRecords int,
+	fallbackInterval time.Duration,
+) ([]Delivery, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("%w: nil context", ErrInvalidConfig)
+	}
+	if fallbackInterval <= 0 || fallbackInterval > time.Minute {
+		return nil, fmt.Errorf("%w: fetch wait interval", ErrInvalidConfig)
+	}
+	for {
+		var wake <-chan struct{}
+		if consumer.waitSignal != nil {
+			wake = consumer.waitSignal()
+		}
+		deliveries, err := consumer.Fetch(ctx, maxRecords)
+		if err != nil || len(deliveries) > 0 {
+			return deliveries, err
+		}
+
+		timer := time.NewTimer(fallbackInterval)
+		select {
+		case <-ctx.Done():
+			stopFetchTimer(timer)
+			return nil, ctx.Err()
+		case <-consumer.done:
+			stopFetchTimer(timer)
+			return nil, ErrClosed
+		case <-wake:
+			stopFetchTimer(timer)
+		case <-timer.C:
+		}
+	}
+}
+
+func stopFetchTimer(timer *time.Timer) {
+	if timer.Stop() {
+		return
+	}
+	select {
+	case <-timer.C:
+	default:
+	}
+}
+
+type ConsumerOption func(*consumerConfig) error
 
 type consumerConfig struct {
 	dlq     *Producer
 	metrics *MetricsHook
 }
 
-// WithDLQ attaches a dead-letter queue producer to the consumer.
-func WithDLQ(p *Producer) ConsumerOption {
-	return func(c *consumerConfig) { c.dlq = p }
+func WithDLQ(producer *Producer) ConsumerOption {
+	return func(config *consumerConfig) error {
+		if producer == nil {
+			return invalidOption("consumer DLQ")
+		}
+		config.dlq = producer
+		return nil
+	}
 }
 
-// WithConsumerMetrics attaches observability hooks to the consumer.
-func WithConsumerMetrics(m *MetricsHook) ConsumerOption {
-	return func(c *consumerConfig) { c.metrics = m }
+func WithConsumerMetrics(metrics *MetricsHook) ConsumerOption {
+	return func(config *consumerConfig) error {
+		config.metrics = metrics
+		return nil
+	}
 }
 
-// NewConsumer creates a consumer that reads from the given commit log.
-// It loads the last committed offset for the group/topic pair.
-func NewConsumer(log *CommitLog, group, topic string, store *OffsetStore, opts ...ConsumerOption) (*Consumer, error) {
-	offset, err := store.Load(group, topic)
+// NewConsumer acquires exclusive cross-process ownership of group/topic and
+// resumes from the last fsynced committed offset.
+func NewConsumer(
+	log *CommitLog,
+	group, topic string,
+	store *OffsetStore,
+	options ...ConsumerOption,
+) (*Consumer, error) {
+	if log == nil || store == nil || !validResourceName(group) || !validResourceName(topic) {
+		return nil, fmt.Errorf("%w: consumer", ErrInvalidConfig)
+	}
+	config, err := resolveConsumerConfig(options...)
 	if err != nil {
 		return nil, err
 	}
+	return newConsumer(log, group, topic, store, config)
+}
 
-	var cfg consumerConfig
-	for _, o := range opts {
-		o(&cfg)
+func resolveConsumerConfig(options ...ConsumerOption) (consumerConfig, error) {
+	var config consumerConfig
+	for _, option := range options {
+		if err := applyOption(option, &config); err != nil {
+			return consumerConfig{}, err
+		}
+	}
+	return config, nil
+}
+
+func newConsumer(
+	log *CommitLog,
+	group, topic string,
+	store *OffsetStore,
+	config consumerConfig,
+) (*Consumer, error) {
+	if log == nil || store == nil || !validResourceName(group) || !validResourceName(topic) {
+		return nil, fmt.Errorf("%w: consumer", ErrInvalidConfig)
+	}
+	log.mu.RLock()
+	logClosed := log.closed
+	logStorageErr := log.storageErr
+	log.mu.RUnlock()
+	if logClosed {
+		return nil, ErrClosed
+	}
+	if logStorageErr != nil {
+		return nil, logStorageErr
+	}
+	lease, err := store.acquireConsumer(group, topic)
+	if err != nil {
+		return nil, err
+	}
+	offset, err := store.Load(group, topic)
+	if err != nil {
+		_ = lease.Close()
+		return nil, err
+	}
+	if offset > log.NewestOffset() {
+		_ = lease.Close()
+		return nil, ErrInvalidOffsetCommit
 	}
 
 	return &Consumer{
-		mu:          locks.NewSpinLock(),
-		log:         log,
-		group:       group,
-		topic:       topic,
-		offset:      offset,
-		offsetStore: store,
-		metrics:     cfg.metrics,
-		dlq:         cfg.dlq,
+		log:             log,
+		group:           group,
+		topic:           topic,
+		offset:          offset,
+		committedOffset: offset,
+		offsetStore:     store,
+		metrics:         config.metrics,
+		dlq:             config.dlq,
+		lease:           lease,
+		done:            make(chan struct{}),
 	}, nil
 }
 
-// Poll reads up to maxRecords from the current offset.
-// Advances the in-memory offset (but does not commit).
-func (c *Consumer) Poll(maxRecords int) ([]Record, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	maxBytes := maxRecords * estimatedBytesPerRecord
-	if maxBytes < minReadBytes {
-		maxBytes = minReadBytes
+// Fetch returns up to maxRecords from the in-memory cursor without committing.
+func (consumer *Consumer) Fetch(ctx context.Context, maxRecords int) (
+	deliveries []Delivery,
+	resultErr error,
+) {
+	if ctx == nil {
+		return nil, fmt.Errorf("%w: nil context", ErrInvalidConfig)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if maxRecords <= 0 || maxRecords > MaxPollRecords {
+		return nil, fmt.Errorf("%w: poll limit", ErrInvalidConfig)
 	}
 
-	batches, err := c.log.Read(c.offset, maxBytes)
+	consumer.mu.Lock()
+	defer func() {
+		consumer.mu.Unlock()
+		if resultErr == nil && len(deliveries) > 0 {
+			consumer.metrics.pollHook(consumer.group, consumer.topic, len(deliveries))
+		}
+	}()
+	if consumer.closed {
+		return nil, ErrClosed
+	}
+
+	fetchStart := consumer.offset
+	deliveries = make([]Delivery, 0, maxRecords)
+	for len(deliveries) < maxRecords && consumer.offset < consumer.log.NewestOffset() {
+		if err := ctx.Err(); err != nil {
+			consumer.offset = fetchStart
+			return nil, err
+		}
+		startOffset := consumer.offset
+		batches, err := consumer.log.Read(consumer.offset, maxEncodedBatchBytes)
+		if err != nil {
+			consumer.offset = fetchStart
+			return nil, err
+		}
+		for _, batch := range batches {
+			batchComplete := true
+			for _, record := range batch.Records {
+				absoluteOffset := batch.BaseOffset + uint64(record.OffsetDelta)
+				if absoluteOffset < consumer.offset {
+					continue
+				}
+				delivery, err := deliveryFromRecord(absoluteOffset, batch.Timestamp, record)
+				if err != nil {
+					consumer.offset = fetchStart
+					return nil, err
+				}
+				deliveries = append(deliveries, delivery)
+				consumer.offset = absoluteOffset + 1
+				if len(deliveries) >= maxRecords {
+					batchComplete = false
+					break
+				}
+			}
+			batchEnd := batch.BaseOffset + uint64(batch.RecordCount)
+			if batchComplete && batchEnd > consumer.offset {
+				consumer.offset = batchEnd
+			}
+			if len(deliveries) >= maxRecords {
+				break
+			}
+		}
+		if consumer.offset == startOffset {
+			break
+		}
+	}
+	return deliveries, nil
+}
+
+// Poll is the legacy record-only fetch API.
+//
+// Deprecated: use Fetch and CommitOffset with explicit Delivery offsets.
+func (consumer *Consumer) Poll(maxRecords int) ([]Record, error) {
+	deliveries, err := consumer.Fetch(context.Background(), maxRecords)
 	if err != nil {
 		return nil, err
 	}
-
-	records := make([]Record, 0, maxRecords)
-	for _, batch := range batches {
-		for _, rec := range batch.Records {
-			absOffset := batch.BaseOffset + uint64(rec.OffsetDelta)
-			if absOffset < c.offset {
-				continue // already consumed
-			}
-			records = append(records, rec)
-			if len(records) >= maxRecords {
-				c.offset = absOffset + 1
-				c.metrics.pollHook(c.group, c.topic, len(records))
-				return records, nil
-			}
-		}
-		// Advance past the entire batch.
-		c.offset = batch.BaseOffset + uint64(batch.RecordCount)
-	}
-
-	if len(records) > 0 {
-		c.metrics.pollHook(c.group, c.topic, len(records))
+	records := make([]Record, len(deliveries))
+	for index, delivery := range deliveries {
+		records[index] = delivery.record()
 	}
 	return records, nil
 }
 
-// Nack sends a failed record to the dead-letter queue.
-// Returns nil if no DLQ is configured (record is silently dropped).
-func (c *Consumer) Nack(rec Record) error {
-	if c.dlq == nil {
-		c.metrics.dropHook(c.topic, "no DLQ configured")
+// CommitOffset fsyncs nextOffset as this group's next delivery. Commits are
+// monotonic and cannot move beyond records fetched by this consumer.
+func (consumer *Consumer) CommitOffset(ctx context.Context, nextOffset uint64) error {
+	if ctx == nil {
+		return fmt.Errorf("%w: nil context", ErrInvalidConfig)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	consumer.mu.Lock()
+	defer consumer.mu.Unlock()
+	if consumer.closed {
+		return ErrClosed
+	}
+	if nextOffset == consumer.committedOffset {
 		return nil
 	}
-
-	// Copy headers to avoid aliasing the caller's slice.
-	headers := make([]Header, len(rec.Headers)+1)
-	copy(headers, rec.Headers)
-	headers[len(rec.Headers)] = Header{
-		Key:   []byte(dlqOriginalTopicKey),
-		Value: []byte(c.topic),
+	if nextOffset < consumer.committedOffset || nextOffset > consumer.offset {
+		return ErrInvalidOffsetCommit
 	}
+	if nextOffset > consumer.log.NewestOffset() {
+		return ErrInvalidOffsetCommit
+	}
+	if err := consumer.offsetStore.Commit(consumer.group, consumer.topic, nextOffset); err != nil {
+		return err
+	}
+	consumer.committedOffset = nextOffset
+	return nil
+}
 
-	err := c.dlq.Send(rec.Key, rec.Value, headers)
+// Commit persists the current cursor.
+//
+// Deprecated: use CommitOffset with an explicit processed Delivery offset.
+func (consumer *Consumer) Commit() error {
+	consumer.mu.Lock()
+	nextOffset := consumer.offset
+	consumer.mu.Unlock()
+	return consumer.CommitOffset(context.Background(), nextOffset)
+}
+
+// Rollback restores the fetch cursor to the last committed offset.
+func (consumer *Consumer) Rollback() error {
+	consumer.mu.Lock()
+	defer consumer.mu.Unlock()
+	if consumer.closed {
+		return ErrClosed
+	}
+	consumer.offset = consumer.committedOffset
+	return nil
+}
+
+// Replay moves only the in-memory cursor. It never changes durable progress.
+func (consumer *Consumer) Replay(offset uint64) error {
+	consumer.mu.Lock()
+	defer consumer.mu.Unlock()
+	if consumer.closed {
+		return ErrClosed
+	}
+	oldest := consumer.log.OldestOffset()
+	newest := consumer.log.NewestOffset()
+	if offset < oldest || offset > newest {
+		return ErrOffsetNotFound
+	}
+	consumer.offset = offset
+	return nil
+}
+
+// Nack writes the failed record to the configured DLQ with fsync durability.
+//
+// Deprecated: use NackContext so cancellation and tracing remain attached.
+func (consumer *Consumer) Nack(record Record) error {
+	return consumer.NackContext(context.Background(), record)
+}
+
+// NackContext writes the failed record to the configured DLQ with fsync
+// durability. It returns ErrDLQNotConfigured instead of silently dropping a
+// record when no DLQ is attached.
+func (consumer *Consumer) NackContext(ctx context.Context, record Record) error {
+	return consumer.nackContext(ctx, record, nil)
+}
+
+// NackDeliveryContext durably quarantines one fetched delivery and preserves
+// its source offset/timestamp for replay tooling and operator diagnosis.
+func (consumer *Consumer) NackDeliveryContext(ctx context.Context, delivery Delivery) error {
+	record := Record{Key: delivery.Key, Value: delivery.Value, Headers: delivery.Headers}
+	return consumer.nackContext(ctx, record, []Header{
+		{Key: []byte(dlqOriginalOffsetKey), Value: []byte(strconv.FormatUint(delivery.Offset, 10))},
+		{Key: []byte(dlqOriginalTimestampKey), Value: []byte(strconv.FormatInt(delivery.Timestamp, 10))},
+	})
+}
+
+func (consumer *Consumer) nackContext(ctx context.Context, record Record, sourceHeaders []Header) error {
+	if ctx == nil {
+		return fmt.Errorf("%w: nil context", ErrInvalidConfig)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	consumer.mu.Lock()
+	if consumer.closed {
+		consumer.mu.Unlock()
+		return ErrClosed
+	}
+	dlq := consumer.dlq
+	topic := consumer.topic
+	consumer.mu.Unlock()
+
+	if dlq == nil {
+		consumer.metrics.dropHook(topic, "no DLQ configured")
+		return ErrDLQNotConfigured
+	}
+	headers := make([]Header, len(record.Headers)+1+len(sourceHeaders))
+	copy(headers, record.Headers)
+	headers[len(record.Headers)] = Header{
+		Key:   []byte(dlqOriginalTopicKey),
+		Value: []byte(topic),
+	}
+	copy(headers[len(record.Headers)+1:], sourceHeaders)
+	err := dlq.SendContext(ctx, record.Key, record.Value, headers, AckFsync)
 	if err != nil {
-		c.metrics.dropHook(c.topic, "DLQ send failed: "+err.Error())
+		consumer.metrics.dropHook(topic, "DLQ send failed")
 	}
 	return err
 }
 
-// Commit persists the current offset to the offset store.
-func (c *Consumer) Commit() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.offsetStore.Commit(c.group, c.topic, c.offset)
+// Seek is the legacy replay alias. It is range-checked and never changes the
+// durable committed offset.
+//
+// Deprecated: use Replay.
+func (consumer *Consumer) Seek(offset uint64) error {
+	return consumer.Replay(offset)
 }
 
-// Seek sets the consumer's read position to the given offset.
-func (c *Consumer) Seek(offset uint64) {
-	c.mu.Lock()
-	c.offset = offset
-	c.mu.Unlock()
+func (consumer *Consumer) SeekToBeginning() {
+	_ = consumer.Replay(consumer.log.OldestOffset())
 }
 
-// SeekToBeginning resets to the oldest available offset.
-func (c *Consumer) SeekToBeginning() {
-	c.mu.Lock()
-	c.offset = c.log.OldestOffset()
-	c.mu.Unlock()
+func (consumer *Consumer) SeekToEnd() {
+	_ = consumer.Replay(consumer.log.NewestOffset())
 }
 
-// SeekToEnd jumps to the newest offset (tail).
-func (c *Consumer) SeekToEnd() {
-	c.mu.Lock()
-	c.offset = c.log.NewestOffset()
-	c.mu.Unlock()
+// Offset returns the current in-memory fetch cursor.
+func (consumer *Consumer) Offset() uint64 {
+	consumer.mu.Lock()
+	defer consumer.mu.Unlock()
+	return consumer.offset
 }
 
-// Offset returns the current read position.
-func (c *Consumer) Offset() uint64 {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.offset
+// CommittedOffset returns the last fsynced group offset.
+func (consumer *Consumer) CommittedOffset() uint64 {
+	consumer.mu.Lock()
+	defer consumer.mu.Unlock()
+	return consumer.committedOffset
+}
+
+// Close releases exclusive group ownership. It is concurrent-idempotent.
+func (consumer *Consumer) Close() error {
+	consumer.closeOnce.Do(func() {
+		consumer.mu.Lock()
+		consumer.closed = true
+		lease := consumer.lease
+		onClose := consumer.onClose
+		done := consumer.done
+		consumer.mu.Unlock()
+
+		if done != nil {
+			close(done)
+		}
+		consumer.closeErr = lease.Close()
+		if onClose != nil {
+			onClose()
+		}
+	})
+	return consumer.closeErr
 }

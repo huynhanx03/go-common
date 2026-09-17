@@ -2,9 +2,16 @@ package middlewares
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
-
+	"net"
+	"net/http"
+	"net/netip"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -12,19 +19,18 @@ import (
 	"github.com/huynhanx03/go-common/pkg/algorithm"
 	"github.com/huynhanx03/go-common/pkg/common/apperr"
 	"github.com/huynhanx03/go-common/pkg/common/http/response"
-	"github.com/huynhanx03/go-common/pkg/common/locks"
 )
 
-// Rate limiter defaults.
 const (
-	defaultRateLimit    = 100
-	defaultRateBurst    = 100
-	defaultRateWindow   = time.Minute
-	defaultCleanupEvery = 5 * time.Minute
-	defaultIdleExpiry   = 10 * time.Minute
+	defaultMaxRateLimitKeys = 10_000
+	hardMaxRateLimitKeys    = 1_000_000
+	defaultIdleExpiry       = 10 * time.Minute
+	maxIdleExpiry           = 24 * time.Hour
+	maxForwardedForBytes    = 4096
+	maxForwardedHops        = 32
+	maxRateLimitKeyBytes    = 256
 )
 
-// Rate limiter header names.
 const (
 	headerRateLimit     = "X-RateLimit-Limit"
 	headerRateRemaining = "X-RateLimit-Remaining"
@@ -32,110 +38,117 @@ const (
 	headerRetryAfter    = "Retry-After"
 )
 
-// RateLimitConfig configures the rate limiting middleware.
 type RateLimitConfig struct {
-	// Limit is the maximum number of requests per window.
-	Limit int
-
-	// Burst is the token bucket capacity (allows short bursts above the rate).
-	Burst int
-
-	// Window is the time window for the sliding window counter.
+	Limit  int
+	Burst  int
 	Window time.Duration
 
-	// KeyFunc extracts the rate limit key from the request (e.g., IP, user ID).
-	// Defaults to client IP.
 	KeyFunc func(*gin.Context) string
+	Skip    func(*gin.Context) bool
 
-	// Skip returns true to bypass rate limiting for this request.
-	Skip func(*gin.Context) bool
+	// MaxKeys bounds per-identity storage. Zero uses 10,000.
+	MaxKeys int
+	// IdleExpiry controls opportunistic removal. Zero uses 10 minutes.
+	IdleExpiry time.Duration
+	// TrustedProxies contains exact IPs or CIDRs allowed to supply
+	// X-Forwarded-For.
+	TrustedProxies []string
+	// Now is injectable for deterministic tests.
+	Now func() time.Time
 
-	// Ctx controls the cleanup goroutine lifetime. Defaults to context.Background().
+	// Deprecated: cleanup no longer owns a goroutine; storage is bounded and
+	// cleaned opportunistically.
 	Ctx context.Context
 }
 
-// rateLimiterEntry holds a per-key limiter and its last access time.
 type rateLimiterEntry struct {
 	bucket   *algorithm.TokenBucket
 	lastSeen time.Time
 }
 
-// RateLimit returns a Gin middleware that enforces per-key rate limiting
-// using a token bucket algorithm.
-func RateLimit(cfg RateLimitConfig) gin.HandlerFunc {
-	if cfg.Limit <= 0 {
-		cfg.Limit = defaultRateLimit
-	}
-	if cfg.Burst <= 0 {
-		cfg.Burst = defaultRateBurst
-	}
-	if cfg.Window <= 0 {
-		cfg.Window = defaultRateWindow
-	}
-	if cfg.KeyFunc == nil {
-		cfg.KeyFunc = func(c *gin.Context) string { return c.ClientIP() }
-	}
-	if cfg.Ctx == nil {
-		cfg.Ctx = context.Background()
-	}
+// RateLimiter owns bounded per-key token buckets without a hidden cleanup
+// goroutine.
+type RateLimiter struct {
+	mu             sync.Mutex
+	config         RateLimitConfig
+	entries        map[string]*rateLimiterEntry
+	trustedProxies []netip.Prefix
+}
 
-	mu := locks.NewSpinLock()
-	limiters := make(map[string]*rateLimiterEntry)
+func NewRateLimiter(config RateLimitConfig) (*RateLimiter, error) {
+	if config.Limit <= 0 || config.Burst <= 0 || config.Window <= 0 {
+		return nil, errors.New("rate limit: limit, burst, and window must be positive")
+	}
+	if config.MaxKeys < 0 ||
+		config.MaxKeys > hardMaxRateLimitKeys ||
+		config.IdleExpiry < 0 ||
+		config.IdleExpiry > maxIdleExpiry {
+		return nil, errors.New("rate limit: invalid storage bounds")
+	}
+	if config.MaxKeys == 0 {
+		config.MaxKeys = defaultMaxRateLimitKeys
+	}
+	if config.IdleExpiry == 0 {
+		config.IdleExpiry = defaultIdleExpiry
+	}
+	if config.Now == nil {
+		config.Now = time.Now
+	}
+	trusted, err := parseTrustedProxies(config.TrustedProxies)
+	if err != nil {
+		return nil, err
+	}
+	return &RateLimiter{
+		config:         config,
+		entries:        make(map[string]*rateLimiterEntry),
+		trustedProxies: trusted,
+	}, nil
+}
 
-	// Background cleanup of stale limiters (stops when cfg.Ctx is cancelled).
-	go func() {
-		ticker := time.NewTicker(defaultCleanupEvery)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-cfg.Ctx.Done():
-				return
-			case <-ticker.C:
-				mu.Lock()
-				now := time.Now()
-				for key, entry := range limiters {
-					if now.Sub(entry.lastSeen) > defaultIdleExpiry {
-						delete(limiters, key)
-					}
-				}
-				mu.Unlock()
-			}
-		}
-	}()
+// NewRateLimit constructs bounded rate-limit middleware.
+func NewRateLimit(config RateLimitConfig) (gin.HandlerFunc, error) {
+	limiter, err := NewRateLimiter(config)
+	if err != nil {
+		return nil, err
+	}
+	return limiter.Middleware(), nil
+}
 
+// RateLimit is a compatibility facade. Invalid configuration fails closed
+// with a 500 response.
+//
+// Deprecated: call NewRateLimit and handle its error at bootstrap.
+func RateLimit(config RateLimitConfig) gin.HandlerFunc {
+	middleware, err := NewRateLimit(config)
+	if err != nil {
+		return func(c *gin.Context) { internalServerError(c) }
+	}
+	return middleware
+}
+
+func (limiter *RateLimiter) Middleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if cfg.Skip != nil && cfg.Skip(c) {
+		if limiter == nil {
+			internalServerError(c)
+			return
+		}
+		if limiter.config.Skip != nil && limiter.config.Skip(c) {
 			c.Next()
 			return
 		}
 
-		key := cfg.KeyFunc(c)
-
-		mu.Lock()
-		entry, ok := limiters[key]
-		if !ok {
-			entry = &rateLimiterEntry{
-				bucket: algorithm.NewTokenBucket(
-					algorithm.WithBucketCapacity(cfg.Burst),
-					algorithm.WithBucketFillRate(cfg.Limit, cfg.Window),
-				),
-			}
-			limiters[key] = entry
-		}
-		entry.lastSeen = time.Now()
-		mu.Unlock()
-
-		// Try to consume a token first, then report accurate remaining count.
+		key := limiter.identity(c)
+		now := limiter.config.Now()
+		entry := limiter.entry(key, now)
 		allowed := entry.bucket.AllowOne()
 		remaining := int(entry.bucket.Tokens())
 
-		c.Header(headerRateLimit, strconv.Itoa(cfg.Limit))
+		c.Header(headerRateLimit, strconv.Itoa(limiter.config.Limit))
 		c.Header(headerRateRemaining, strconv.Itoa(remaining))
-		c.Header(headerRateReset, strconv.FormatInt(time.Now().Add(cfg.Window).Unix(), 10))
-
+		c.Header(headerRateReset, strconv.FormatInt(now.Add(limiter.config.Window).Unix(), 10))
 		if !allowed {
-			retryAfter := cfg.Window.Seconds()
-			c.Header(headerRetryAfter, fmt.Sprintf("%.0f", retryAfter))
+			retryAfter := max(int64(1), int64(limiter.config.Window/time.Second))
+			c.Header(headerRetryAfter, strconv.FormatInt(retryAfter, 10))
 			response.ErrorResponse(c, apperr.CodeTooManyRequests, apperr.New(
 				apperr.CodeTooManyRequests,
 				"rate limit exceeded",
@@ -144,7 +157,158 @@ func RateLimit(cfg RateLimitConfig) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-
 		c.Next()
 	}
+}
+
+func (limiter *RateLimiter) entry(key string, now time.Time) *rateLimiterEntry {
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+
+	if existing, found := limiter.entries[key]; found {
+		existing.lastSeen = now
+		return existing
+	}
+	if len(limiter.entries) >= limiter.config.MaxKeys {
+		limiter.removeExpired(now)
+	}
+	if len(limiter.entries) >= limiter.config.MaxKeys {
+		limiter.removeOldest()
+	}
+
+	entry := &rateLimiterEntry{
+		bucket: algorithm.NewTokenBucket(
+			algorithm.WithBucketCapacity(limiter.config.Burst),
+			algorithm.WithBucketFillRate(limiter.config.Limit, limiter.config.Window),
+			algorithm.WithBucketClock(func() int64 { return limiter.config.Now().UnixNano() }),
+		),
+		lastSeen: now,
+	}
+	limiter.entries[key] = entry
+	return entry
+}
+
+func (limiter *RateLimiter) removeExpired(now time.Time) {
+	for key, entry := range limiter.entries {
+		if now.Sub(entry.lastSeen) >= limiter.config.IdleExpiry {
+			delete(limiter.entries, key)
+		}
+	}
+}
+
+func (limiter *RateLimiter) removeOldest() {
+	var oldestKey string
+	var oldestTime time.Time
+	for key, entry := range limiter.entries {
+		if oldestKey == "" || entry.lastSeen.Before(oldestTime) {
+			oldestKey = key
+			oldestTime = entry.lastSeen
+		}
+	}
+	if oldestKey != "" {
+		delete(limiter.entries, oldestKey)
+	}
+}
+
+func (limiter *RateLimiter) identity(c *gin.Context) string {
+	var key string
+	if limiter.config.KeyFunc != nil {
+		key = limiter.config.KeyFunc(c)
+	} else {
+		key = limiter.clientIP(c.Request)
+	}
+	if key == "" {
+		key = "unknown"
+	}
+	if len(key) <= maxRateLimitKeyBytes {
+		return key
+	}
+	sum := sha256.Sum256([]byte(key))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func (limiter *RateLimiter) clientIP(request *http.Request) string {
+	peer, peerOK := parseRemoteAddress(request.RemoteAddr)
+	if !peerOK {
+		return boundedRemoteAddress(request.RemoteAddr)
+	}
+	if !limiter.trusted(peer) {
+		return peer.String()
+	}
+
+	raw := request.Header.Get("X-Forwarded-For")
+	if raw == "" || len(raw) > maxForwardedForBytes {
+		return peer.String()
+	}
+	parts := strings.Split(raw, ",")
+	if len(parts) > maxForwardedHops {
+		return peer.String()
+	}
+	chain := make([]netip.Addr, 0, len(parts))
+	for _, part := range parts {
+		address, err := netip.ParseAddr(strings.TrimSpace(part))
+		if err != nil {
+			return peer.String()
+		}
+		chain = append(chain, address.Unmap())
+	}
+
+	current := peer
+	for index := len(chain) - 1; index >= 0; index-- {
+		if !limiter.trusted(current) {
+			break
+		}
+		current = chain[index]
+	}
+	return current.String()
+}
+
+func (limiter *RateLimiter) trusted(address netip.Addr) bool {
+	for _, prefix := range limiter.trustedProxies {
+		if prefix.Contains(address) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseTrustedProxies(values []string) ([]netip.Prefix, error) {
+	result := make([]netip.Prefix, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return nil, errors.New("rate limit: empty trusted proxy")
+		}
+		if prefix, err := netip.ParsePrefix(value); err == nil {
+			result = append(result, prefix.Masked())
+			continue
+		}
+		address, err := netip.ParseAddr(value)
+		if err != nil {
+			return nil, fmt.Errorf("rate limit: invalid trusted proxy %q", value)
+		}
+		address = address.Unmap()
+		result = append(result, netip.PrefixFrom(address, address.BitLen()))
+	}
+	return result, nil
+}
+
+func parseRemoteAddress(value string) (netip.Addr, bool) {
+	host, _, err := net.SplitHostPort(value)
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	address, err := netip.ParseAddr(host)
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	return address.Unmap(), true
+}
+
+func boundedRemoteAddress(value string) string {
+	if len(value) <= maxRateLimitKeyBytes {
+		return "remote:" + value
+	}
+	sum := sha256.Sum256([]byte(value))
+	return "remote-sha256:" + hex.EncodeToString(sum[:])
 }

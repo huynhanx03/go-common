@@ -1,5 +1,18 @@
 package batcher
 
+import "errors"
+
+const (
+	DefaultBatchSize = 512
+	MaxBatchSize     = 65_536
+)
+
+var (
+	ErrInvalidConfig = errors.New("batcher: invalid configuration")
+	ErrClosed        = errors.New("batcher: closed")
+	ErrConsumerPanic = errors.New("batcher: consumer panic")
+)
+
 // Consumer is the interface that must be implemented by users of the Batcher.
 // It is responsible for processing a batch of items.
 type Consumer[T any] interface {

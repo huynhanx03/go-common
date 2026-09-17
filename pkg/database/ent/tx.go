@@ -2,10 +2,32 @@ package ent
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/huynhanx03/go-common/pkg/common/tx"
 )
+
+var ErrInvalidTransaction = errors.New("ent: invalid transaction contract")
+
+// TransactionPanicError preserves a rollback failure when a callback panics
+// without rendering the recovered value in Error().
+type TransactionPanicError struct {
+	Recovered   any
+	RollbackErr error
+}
+
+func (*TransactionPanicError) Error() string {
+	return "ent: transaction callback panicked and rollback failed"
+}
+
+func (err *TransactionPanicError) Unwrap() error {
+	if err == nil {
+		return nil
+	}
+	return err.RollbackErr
+}
 
 // Tx is the behavior WithTx needs from a generated *ent.Tx.
 type Tx interface {
@@ -24,19 +46,36 @@ type Tx interface {
 //		return t.Wallet.UpdateOneID(id).AddBalance(-10).Exec(ctx)
 //	})
 func WithTx[T Tx](ctx context.Context, begin func(context.Context) (T, error), fn func(T) error) error {
+	if ctx == nil || begin == nil || fn == nil {
+		return ErrInvalidTransaction
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	t, err := begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
+	if nilTransaction(t) {
+		return ErrInvalidTransaction
+	}
 	defer func() {
 		if v := recover(); v != nil {
-			_ = t.Rollback()
+			if rollbackErr := t.Rollback(); rollbackErr != nil {
+				panic(&TransactionPanicError{
+					Recovered:   v,
+					RollbackErr: rollbackErr,
+				})
+			}
 			panic(v)
 		}
 	}()
 	if err := fn(t); err != nil {
 		if rerr := t.Rollback(); rerr != nil {
-			return fmt.Errorf("%w: rolling back transaction: %v", err, rerr)
+			return errors.Join(
+				err,
+				fmt.Errorf("rollback transaction: %w", rerr),
+			)
 		}
 		return err
 	}
@@ -44,6 +83,20 @@ func WithTx[T Tx](ctx context.Context, begin func(context.Context) (T, error), f
 		return fmt.Errorf("commit transaction: %w", err)
 	}
 	return nil
+}
+
+func nilTransaction[T Tx](transaction T) bool {
+	value := reflect.ValueOf(transaction)
+	if !value.IsValid() {
+		return true
+	}
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
+		reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 // NewTxManager adapts a generated ent client to the shared tx.Manager
@@ -66,7 +119,14 @@ type txManager[T Tx] struct {
 }
 
 func (m txManager[T]) DoInTx(ctx context.Context, fn func(ctx context.Context) error) error {
+	if ctx == nil || fn == nil || m.begin == nil || m.inject == nil {
+		return ErrInvalidTransaction
+	}
 	return WithTx(ctx, m.begin, func(t T) error {
-		return fn(m.inject(ctx, t))
+		transactionContext := m.inject(ctx, t)
+		if transactionContext == nil {
+			return ErrInvalidTransaction
+		}
+		return fn(transactionContext)
 	})
 }

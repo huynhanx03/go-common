@@ -3,8 +3,8 @@ package ent
 import (
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/huynhanx03/go-common/pkg/common/apperr"
 )
@@ -20,14 +20,24 @@ type ErrorPredicates struct {
 	IsNotSingular     func(error) bool
 }
 
-// registered holds application-provided predicates. Register at startup,
-// before serving traffic — reads are not synchronized.
-var registered []ErrorPredicates
+var errorPredicates struct {
+	sync.RWMutex
+	registered []ErrorPredicates
+}
 
 // RegisterErrorPredicates registers generated-Ent error recognizers.
 // Call once at application startup.
 func RegisterErrorPredicates(p ErrorPredicates) {
-	registered = append(registered, p)
+	errorPredicates.Lock()
+	errorPredicates.registered = append(errorPredicates.registered, p)
+	errorPredicates.Unlock()
+}
+
+func registeredErrorPredicates() []ErrorPredicates {
+	errorPredicates.RLock()
+	registered := append([]ErrorPredicates(nil), errorPredicates.registered...)
+	errorPredicates.RUnlock()
+	return registered
 }
 
 // NotFoundError returns when trying to fetch a specific entity and it was not found in the database.
@@ -144,7 +154,7 @@ func isNotFound(err error) bool {
 	if IsNotFound(err) {
 		return true
 	}
-	for _, p := range registered {
+	for _, p := range registeredErrorPredicates() {
 		if p.IsNotFound != nil && p.IsNotFound(err) {
 			return true
 		}
@@ -157,7 +167,7 @@ func isValidationError(err error) bool {
 	if IsValidationError(err) {
 		return true
 	}
-	for _, p := range registered {
+	for _, p := range registeredErrorPredicates() {
 		if p.IsValidationError != nil && p.IsValidationError(err) {
 			return true
 		}
@@ -170,7 +180,7 @@ func isConstraintError(err error) bool {
 	if IsConstraintError(err) {
 		return true
 	}
-	for _, p := range registered {
+	for _, p := range registeredErrorPredicates() {
 		if p.IsConstraintError != nil && p.IsConstraintError(err) {
 			return true
 		}
@@ -183,7 +193,7 @@ func isNotLoaded(err error) bool {
 	if IsNotLoaded(err) {
 		return true
 	}
-	for _, p := range registered {
+	for _, p := range registeredErrorPredicates() {
 		if p.IsNotLoaded != nil && p.IsNotLoaded(err) {
 			return true
 		}
@@ -196,7 +206,7 @@ func isNotSingular(err error) bool {
 	if IsNotSingular(err) {
 		return true
 	}
-	for _, p := range registered {
+	for _, p := range registeredErrorPredicates() {
 		if p.IsNotSingular != nil && p.IsNotSingular(err) {
 			return true
 		}
@@ -232,7 +242,6 @@ func MapEntError(err error, messagePrefix string) *apperr.AppError {
 			return apperr.New(apperr.CodeBadRequest, fmt.Sprintf("%s contains invalid reference data", messagePrefix), err)
 
 		case strings.Contains(errStr, "deadlock"):
-			slog.Error("Database deadlock occurred", "error", err)
 			return apperr.New(apperr.CodeDatabaseError, "Operation temporarily unavailable, please try again", err)
 		}
 
@@ -240,7 +249,6 @@ func MapEntError(err error, messagePrefix string) *apperr.AppError {
 	}
 
 	if isNotLoaded(err) {
-		slog.Error("Server logic error: edge was not loaded before access", "error", err)
 		return apperr.New(apperr.CodeInternalServer, "Internal server error", err)
 	}
 
@@ -248,6 +256,5 @@ func MapEntError(err error, messagePrefix string) *apperr.AppError {
 		return apperr.New(apperr.CodeBadRequest, fmt.Sprintf("%s is not uniquely identifiable", messagePrefix), err)
 	}
 
-	slog.Error("Unexpected database error", "error", err)
 	return apperr.New(apperr.CodeDatabaseError, "An unexpected database error occurred", err)
 }

@@ -4,7 +4,8 @@ package forge
 // All callbacks are optional — nil means no-op.
 type MetricsHook struct {
 	// OnFlush is called after a producer flushes a batch.
-	// records = number of records, bytes = encoded size.
+	// records is the record count; bytes is the admitted logical record size
+	// before compression and excludes batch framing.
 	OnFlush func(topic string, records int, bytes int)
 
 	// OnPoll is called after a consumer polls records.
@@ -19,24 +20,31 @@ type MetricsHook struct {
 
 func (m *MetricsHook) flushHook(topic string, records, bytes int) {
 	if m != nil && m.OnFlush != nil {
-		m.OnFlush(topic, records, bytes)
+		safeMetric(func() { m.OnFlush(topic, records, bytes) })
 	}
 }
 
 func (m *MetricsHook) pollHook(group, topic string, records int) {
 	if m != nil && m.OnPoll != nil {
-		m.OnPoll(group, topic, records)
+		safeMetric(func() { m.OnPoll(group, topic, records) })
 	}
 }
 
 func (m *MetricsHook) dropHook(topic string, reason string) {
 	if m != nil && m.OnDrop != nil {
-		m.OnDrop(topic, reason)
+		safeMetric(func() { m.OnDrop(topic, reason) })
 	}
 }
 
 func (m *MetricsHook) backpressureHook(topic string) {
 	if m != nil && m.OnBackpressure != nil {
-		m.OnBackpressure(topic)
+		safeMetric(func() { m.OnBackpressure(topic) })
 	}
+}
+
+func safeMetric(callback func()) {
+	defer func() {
+		_ = recover()
+	}()
+	callback()
 }

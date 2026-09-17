@@ -62,3 +62,23 @@ func TestErrorResponseRendersDetails(t *testing.T) {
 		t.Errorf("details not rendered, data = %v", body["data"])
 	}
 }
+
+func TestRespondStatusPreservesSuccessEnvelopeWithExplicitHTTPStatus(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+
+	RespondStatus(ctx, http.StatusAccepted, map[string]string{"status": "accepted"})
+
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusAccepted)
+	}
+	var body Body
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Code != apperr.CodeSuccess {
+		t.Fatalf("code = %d, want %d", body.Code, apperr.CodeSuccess)
+	}
+}

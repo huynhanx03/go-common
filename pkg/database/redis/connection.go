@@ -1,6 +1,7 @@
 package redis
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/huynhanx03/go-common/pkg/settings"
@@ -8,12 +9,22 @@ import (
 
 // NewConnection creates and returns a new Redis client
 func NewConnection(cfg *settings.Redis) (*RedisEngine, error) {
+	if cfg == nil {
+		return nil, ErrInvalidConfig
+	}
+	owned := *cfg
 	engine := &RedisEngine{
-		config: cfg,
+		config: &owned,
 	}
 
 	if err := engine.connect(); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrConnectionFailed, err)
+		if errors.Is(err, ErrInvalidConfig) {
+			return nil, err
+		}
+		return nil, errors.Join(
+			ErrConnectionFailed,
+			fmt.Errorf("connect redis: %w", err),
+		)
 	}
 
 	return engine, nil

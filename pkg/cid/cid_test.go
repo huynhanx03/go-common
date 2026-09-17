@@ -2,12 +2,31 @@ package cid
 
 import (
 	"context"
+	"io"
 	"net/http"
-	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 )
+
+type legacyRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn legacyRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
+func captureTransport(received *string) http.RoundTripper {
+	return legacyRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		*received = req.Header.Get(Header)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("")),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})
+}
 
 func TestNewIsUUIDv7(t *testing.T) {
 	id, err := uuid.Parse(New())
@@ -43,15 +62,10 @@ func TestEnsureContext(t *testing.T) {
 
 func TestRoundTripperInjectsHeader(t *testing.T) {
 	var received string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		received = r.Header.Get(Header)
-	}))
-	defer srv.Close()
-
-	client := &http.Client{Transport: RoundTripper(nil)}
+	client := &http.Client{Transport: RoundTripper(captureTransport(&received))}
 
 	ctx := WithContext(context.Background(), "cid-outgoing")
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://example.test", nil)
 	if _, err := client.Do(req); err != nil {
 		t.Fatalf("request: %v", err)
 	}
@@ -63,15 +77,10 @@ func TestRoundTripperInjectsHeader(t *testing.T) {
 
 func TestRoundTripperRespectsExistingHeader(t *testing.T) {
 	var received string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		received = r.Header.Get(Header)
-	}))
-	defer srv.Close()
-
-	client := &http.Client{Transport: RoundTripper(nil)}
+	client := &http.Client{Transport: RoundTripper(captureTransport(&received))}
 
 	ctx := WithContext(context.Background(), "from-context")
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://example.test", nil)
 	req.Header.Set(Header, "caller-set")
 	if _, err := client.Do(req); err != nil {
 		t.Fatalf("request: %v", err)

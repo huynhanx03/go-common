@@ -2,10 +2,10 @@ package btree
 
 import (
 	"math"
+	"unsafe"
 
 	"github.com/huynhanx03/go-common/pkg/datastructs/buffer"
 	bufferpool "github.com/huynhanx03/go-common/pkg/pool/buffer"
-	"github.com/huynhanx03/go-common/pkg/utils"
 )
 
 type Tree struct {
@@ -106,7 +106,15 @@ func (t *Tree) newNode(bit uint64) node {
 }
 
 func getNode(data []byte) node {
-	return node(utils.BytesToUint64Slice(data))
+	if len(data) == 0 {
+		return nil
+	}
+	// btree is explicitly experimental and its page representation requires a
+	// mutable zero-copy view. Stable conversion helpers intentionally copy.
+	return node(unsafe.Slice(
+		(*uint64)(unsafe.Pointer(unsafe.SliceData(data))),
+		len(data)/8,
+	))
 }
 
 func zeroOut(data []uint64) {

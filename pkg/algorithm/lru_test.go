@@ -59,7 +59,7 @@ func TestSelectLRUVictimStatistical(t *testing.T) {
 	// With enough random samples, it should be picked most often.
 	pool := make([]LRUEntry, 100)
 	for i := range pool {
-		pool[i] = LRUEntry{Key: uint64(i), LastAccess: int64(i + 1) * 1000}
+		pool[i] = LRUEntry{Key: uint64(i), LastAccess: int64(i+1) * 1000}
 	}
 	pool[0] = LRUEntry{Key: 0, LastAccess: 1} // Oldest by far
 

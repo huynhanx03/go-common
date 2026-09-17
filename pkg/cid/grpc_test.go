@@ -88,6 +88,21 @@ func TestUnaryServerInterceptorGeneratesWhenMissing(t *testing.T) {
 	}
 }
 
+func TestUnaryServerInterceptorRejectsInvalidIncomingCID(t *testing.T) {
+	var got string
+	handler := func(ctx context.Context, req any) (any, error) {
+		got = FromContext(ctx)
+		return nil, nil
+	}
+
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(Header, "invalid cid"))
+	_, _ = UnaryServerInterceptor()(ctx, nil, nil, handler)
+
+	if got == "invalid cid" || got == "" {
+		t.Fatalf("handler cid = %q, want a fresh valid cid", got)
+	}
+}
+
 func TestStreamServerInterceptorPropagatesCID(t *testing.T) {
 	var got string
 	handler := func(srv any, ss grpc.ServerStream) error {

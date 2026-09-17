@@ -3,6 +3,7 @@ package widecolumn
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"testing"
 	"time"
@@ -43,8 +44,8 @@ func (m TestModel) ColumnValues() []interface{} {
 }
 
 func TestClient_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
+	if testing.Short() || os.Getenv("GO_COMMON_INTEGRATION") != "1" {
+		t.Skip("set GO_COMMON_INTEGRATION=1 to run container integration tests")
 	}
 
 	ctx := context.Background()
@@ -203,7 +204,11 @@ func setupScyllaBox(ctx context.Context) (string, int, func(), error) {
 		Image:        scyllaImage,
 		ExposedPorts: []string{scyllaPort},
 		Cmd:          []string{"--smp", "1", "--memory", "750M", "--overprovisioned", "1", "--api-address", "0.0.0.0"},
-		WaitingFor:   wait.ForLog("Scylla version").WithStartupTimeout(2 * time.Minute),
+		WaitingFor: wait.ForAll(
+			wait.ForLog("Scylla version"),
+			wait.ForExec([]string{"cqlsh", "-e", "SELECT release_version FROM system.local;"}).
+				WithPollInterval(time.Second),
+		).WithDeadline(2 * time.Minute),
 	}
 
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{

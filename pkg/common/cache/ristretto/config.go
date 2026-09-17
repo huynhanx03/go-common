@@ -47,9 +47,9 @@ func WithCost(fn func(any) int64) Option {
 // MaxCost = 100 MB, NumCounters = 10M, BufferItems = 64, Metrics enabled.
 func DefaultConfig() ristretto.Config {
 	return ristretto.Config{
-		NumCounters: 1e7,             // 10 million counters
-		MaxCost:     100 << 20,       // 100 MB
-		BufferItems: 64,              // number of keys per Get buffer
-		Metrics:     true,            // enable metrics collection
+		NumCounters: 1e7,       // 10 million counters
+		MaxCost:     100 << 20, // 100 MB
+		BufferItems: 64,        // number of keys per Get buffer
+		Metrics:     true,      // enable metrics collection
 	}
 }

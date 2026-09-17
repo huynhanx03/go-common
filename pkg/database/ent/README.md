@@ -1,9 +1,9 @@
 # ent
 
-Shared toolkit for [Ent](https://entgo.io) based services: audit mixins, soft
-delete, transactions, query logging, safe dynamic filters, and error mapping.
-Generic parts live here; anything that needs the generated client stays a
-one-liner in the application.
+Shared toolkit for [Ent](https://entgo.io) based services: audit,
+append-only and soft-delete mixins, transactions, query logging, safe dynamic
+filters, and error mapping. Generic parts live here; anything that needs the
+generated client stays a one-liner in the application.
 
 ## Setup
 
@@ -81,6 +81,43 @@ func (User) Mixin() []ent.Mixin {
 - `ModifierMixin` — stamps the actor on create/update. Explicitly set
   values win; `ent.SkipModifier(ctx)` bypasses stamping (imports,
   migrations).
+
+## Append-only schemas
+
+Use `AppendOnlyMixin` for records that must never be changed after they are
+inserted, such as audit events or immutable content revisions:
+
+```go
+func (Event) Mixin() []ent.Mixin {
+    return []ent.Mixin{
+        e.UUIDMixin{},
+        e.TimeMixin{},
+        e.AppendOnlyMixin{},
+    }
+}
+```
+
+Generated update and delete builders fail with
+`e.ErrAppendOnlyMutation`; classify the error with `errors.Is`. Creates and
+bulk creates continue to work. The hook deliberately permits only the exact
+`ent.OpCreate` operation, so nil, combined, unknown, and future operations
+fail closed.
+
+The mixin is one application-layer guard, not the durable invariant:
+
+- raw SQL can bypass generated hooks;
+- Ent exposes create builders configured with `OnConflict` as
+  `ent.OpCreate`, so the generic hook cannot distinguish a plain insert from
+  an upsert that updates an existing row;
+- field-level `Immutable()` annotations do not prevent row deletion,
+  no-op updates, or `TRUNCATE`.
+
+Protect production tables with database-level `UPDATE`, `DELETE`, and
+`TRUNCATE` rejection as well, and exercise that behavior in migration tests.
+`ON CONFLICT DO NOTHING` can remain valid; `ON CONFLICT DO UPDATE` must be
+rejected by the database guard. Do not combine append-only and soft-delete
+semantics on the same schema: deleting an append-only row is forbidden, not
+a state transition.
 
 ## Soft delete
 

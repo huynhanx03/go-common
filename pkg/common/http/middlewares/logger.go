@@ -1,6 +1,7 @@
 package middlewares
 
 import (
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -8,7 +9,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
-	"github.com/huynhanx03/go-common/pkg/cid"
 	"github.com/huynhanx03/go-common/pkg/constraints"
 	"github.com/huynhanx03/go-common/pkg/logger"
 )
@@ -22,25 +22,16 @@ const redactedValue = "REDACTED"
 // from the X-Correlation-ID header when an upstream service already set one.
 // Pass the application's root zap logger; it is namespaced under "http".
 func RequestLogger(rootLogger *zap.Logger) gin.HandlerFunc {
+	if rootLogger == nil {
+		rootLogger = zap.L()
+	}
 	base := rootLogger.Named("http")
 
 	return func(c *gin.Context) {
 		start := time.Now()
 
-		// Generate or reuse the correlation ID
-		id := c.GetHeader(cid.Header)
-		if id == "" {
-			id = cid.New()
-		}
-		c.Header(cid.Header, id)
-
-		// Build per-request logger with cid baked in
-		reqLogger := base.With(zap.String("cid", id))
-
-		// Inject cid + logger into context — downstream uses
-		// logger.FromContext(ctx), and outgoing HTTP/MQ calls pick up the cid
-		ctx := cid.WithContext(c.Request.Context(), id)
-		ctx = logger.WithContext(ctx, reqLogger)
+		ctx := ensureCorrelation(c)
+		ctx = logger.WithContext(ctx, base)
 		c.Request = c.Request.WithContext(ctx)
 
 		c.Next()
@@ -49,9 +40,13 @@ func RequestLogger(rootLogger *zap.Logger) gin.HandlerFunc {
 		latency := time.Since(start)
 		status := c.Writer.Status()
 
+		path := c.FullPath()
+		if path == "" {
+			path = "unmatched"
+		}
 		fields := []zap.Field{
 			zap.String("method", c.Request.Method),
-			zap.String("path", c.Request.URL.Path),
+			zap.String("path", path),
 			zap.Int("status", status),
 			zap.Duration("latency", latency),
 			zap.String("ip", c.ClientIP()),
@@ -68,12 +63,13 @@ func RequestLogger(rootLogger *zap.Logger) gin.HandlerFunc {
 		// Errors attached by handlers via c.Error(err) — without this, a 500
 		// in the access log says nothing about its cause.
 		if len(c.Errors) > 0 {
-			fields = append(fields, zap.Strings("errors", c.Errors.Errors()))
+			fields = append(fields, zap.Int("error_count", len(c.Errors)))
 		}
 
+		reqLogger := logger.FromContext(c.Request.Context())
 		if status >= 500 {
 			reqLogger.Error("request", fields...)
-		} else if status >= 400 {
+		} else if status == http.StatusTooManyRequests {
 			reqLogger.Warn("request", fields...)
 		} else {
 			reqLogger.Info("request", fields...)
@@ -110,6 +106,11 @@ var sensitiveMarkers = []string{
 	"secret",
 	"credential",
 	"auth",
+	"ticket",
+	"payload",
+	"source",
+	"body",
+	"content",
 }
 
 // sensitiveKeys flags query parameters by exact name (lowercase).

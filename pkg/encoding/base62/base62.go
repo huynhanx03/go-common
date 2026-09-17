@@ -6,14 +6,27 @@
 // 36 characters to 22 and decodes back losslessly, so nothing extra is
 // stored:
 //
-//	s := base62.Encode(id[:])      // "1BJhYuJgAcTkzLdaqPezov"
+//	s, err := base62.Encode(id[:]) // "1BJhYuJgAcTkzLdaqPezov"
 //	b, err := base62.Decode(s)
 //	id, err := uuid.FromBytes(b)
 package base62
 
 import (
+	"errors"
 	"fmt"
 	"math/big"
+)
+
+const (
+	// MaxInputBytes bounds big.Int allocation for untrusted binary input.
+	MaxInputBytes = 1 << 20
+	// MaxEncodedBytes is a conservative bound for MaxInputBytes in base62.
+	MaxEncodedBytes = 1_500_000
+)
+
+var (
+	ErrInputTooLarge   = errors.New("base62: input too large")
+	ErrInvalidEncoding = errors.New("base62: invalid encoding")
 )
 
 // Alphabet is the base62 character set, ordered by ASCII value so encoded
@@ -39,7 +52,10 @@ func init() {
 // Encode encodes b as base62. Leading zero bytes are preserved as leading
 // '0' characters (the base58 convention), so Decode(Encode(b)) always
 // returns exactly b.
-func Encode(b []byte) string {
+func Encode(b []byte) (string, error) {
+	if len(b) > MaxInputBytes {
+		return "", ErrInputTooLarge
+	}
 	zeros := 0
 	for zeros < len(b) && b[zeros] == 0 {
 		zeros++
@@ -47,7 +63,11 @@ func Encode(b []byte) string {
 
 	n := new(big.Int).SetBytes(b[zeros:])
 	mod := new(big.Int)
-	out := make([]byte, 0, zeros+len(b)*2)
+	capacity := zeros + (len(b)*3)/2 + 1
+	if capacity > MaxEncodedBytes {
+		capacity = MaxEncodedBytes
+	}
+	out := make([]byte, 0, capacity)
 	for n.Sign() > 0 {
 		n.DivMod(n, base, mod)
 		out = append(out, Alphabet[mod.Int64()])
@@ -60,12 +80,18 @@ func Encode(b []byte) string {
 	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
 		out[i], out[j] = out[j], out[i]
 	}
-	return string(out)
+	if len(out) > MaxEncodedBytes {
+		return "", ErrInputTooLarge
+	}
+	return string(out), nil
 }
 
 // Decode decodes a base62 string produced by Encode. It fails on any
 // character outside the alphabet.
 func Decode(s string) ([]byte, error) {
+	if len(s) > MaxEncodedBytes {
+		return nil, ErrInputTooLarge
+	}
 	zeros := 0
 	for zeros < len(s) && s[zeros] == Alphabet[0] {
 		zeros++
@@ -75,13 +101,21 @@ func Decode(s string) ([]byte, error) {
 	for i := zeros; i < len(s); i++ {
 		c := s[i]
 		if c >= 128 || decodeMap[c] < 0 {
-			return nil, fmt.Errorf("base62: invalid character %q at position %d", c, i)
+			return nil, fmt.Errorf(
+				"%w: invalid character %q at position %d",
+				ErrInvalidEncoding,
+				c,
+				i,
+			)
 		}
 		n.Mul(n, base)
 		n.Add(n, big.NewInt(int64(decodeMap[c])))
 	}
 
 	digits := n.Bytes()
+	if zeros+len(digits) > MaxInputBytes {
+		return nil, ErrInputTooLarge
+	}
 	out := make([]byte, zeros+len(digits))
 	copy(out[zeros:], digits)
 	return out, nil

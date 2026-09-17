@@ -36,10 +36,10 @@ func BenchmarkProducerThroughput(b *testing.B) {
 // BenchmarkBatchEncodeDecode measures raw encode/decode performance.
 func BenchmarkBatchEncodeDecode(b *testing.B) {
 	batch := &RecordBatch{
-		Compression: CompressionNone,
-		Timestamp:   1000000,
+		Compression:  CompressionNone,
+		Timestamp:    1000000,
 		MaxTimestamp: 1000000,
-		RecordCount: 10,
+		RecordCount:  10,
 	}
 	for i := 0; i < 10; i++ {
 		batch.Records = append(batch.Records, Record{
@@ -73,8 +73,8 @@ func BenchmarkCommitLogAppend(b *testing.B) {
 	defer cl.Close()
 
 	batch := &RecordBatch{
-		Compression: CompressionNone,
-		Timestamp:   1,
+		Compression:  CompressionNone,
+		Timestamp:    1,
 		MaxTimestamp: 1,
 		Records: []Record{
 			{Value: make([]byte, 100)},

@@ -2,13 +2,14 @@ package forge
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 )
 
 func TestRecordBatchRoundTrip(t *testing.T) {
 	batch := &RecordBatch{
-		Compression: CompressionNone,
-		Timestamp:   1000000,
+		Compression:  CompressionNone,
+		Timestamp:    1000000,
 		MaxTimestamp: 1000500,
 		Records: []Record{
 			{
@@ -88,13 +89,74 @@ func TestRecordBatchRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDecodeBatchReturnsOwnedRecordBytes(t *testing.T) {
+	encoded, err := EncodeBatch(&RecordBatch{
+		RecordCount: 1,
+		Records: []Record{{
+			Key:     []byte("key"),
+			Value:   []byte("value"),
+			Headers: []Header{{Key: []byte("header"), Value: []byte("metadata")}},
+		}},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeBatch(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range encoded {
+		encoded[index] = 0
+	}
+	record := decoded.Records[0]
+	if string(record.Key) != "key" ||
+		string(record.Value) != "value" ||
+		string(record.Headers[0].Key) != "header" ||
+		string(record.Headers[0].Value) != "metadata" {
+		t.Fatalf("decoded record aliases input: %#v", record)
+	}
+}
+
+func TestDecodeBatchRejectsNonCanonicalRecordOffsets(t *testing.T) {
+	batch := &RecordBatch{
+		BaseOffset:  10,
+		RecordCount: 1,
+		Records: []Record{{
+			OffsetDelta: 2,
+			Value:       []byte("value"),
+		}},
+	}
+	encoded, err := EncodeBatch(batch, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeBatch(encoded); !errors.Is(err, ErrCorruptRecord) {
+		t.Fatalf("DecodeBatch() error = %v, want ErrCorruptRecord", err)
+	}
+}
+
+func TestBatchChecksumProtectsBaseOffset(t *testing.T) {
+	batch := &RecordBatch{
+		RecordCount: 1,
+		Records:     []Record{{Value: []byte("value")}},
+	}
+	encoded, err := EncodeBatch(batch, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded[7] ^= 1
+	if _, err := DecodeBatch(encoded); !errors.Is(err, ErrChecksumMismatch) {
+		t.Fatalf("DecodeBatch() error = %v, want ErrChecksumMismatch", err)
+	}
+}
+
 func TestBatchSize(t *testing.T) {
 	batch := &RecordBatch{
-		Compression: CompressionNone,
-		Timestamp:   999,
+		Compression:  CompressionNone,
+		Timestamp:    999,
 		MaxTimestamp: 999,
-		Records:     []Record{{Value: []byte("test")}},
-		RecordCount: 1,
+		Records:      []Record{{Value: []byte("test")}},
+		RecordCount:  1,
 	}
 
 	encoded, err := EncodeBatch(batch, nil)
@@ -118,13 +180,27 @@ func TestDecodeBatchCorrupt(t *testing.T) {
 	}
 }
 
+func TestDecodeBatchRejectsTrailingFramingBytes(t *testing.T) {
+	encoded, err := EncodeBatch(&RecordBatch{
+		RecordCount: 1,
+		Records:     []Record{{Value: []byte("value")}},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded = append(encoded, 0)
+	if _, err := DecodeBatch(encoded); !errors.Is(err, ErrCorruptBatch) {
+		t.Fatalf("DecodeBatch trailing byte error = %v, want ErrCorruptBatch", err)
+	}
+}
+
 func TestDecodeBatchCRCMismatch(t *testing.T) {
 	batch := &RecordBatch{
-		Compression: CompressionNone,
-		Timestamp:   1,
+		Compression:  CompressionNone,
+		Timestamp:    1,
 		MaxTimestamp: 1,
-		Records:     []Record{{Value: []byte("x")}},
-		RecordCount: 1,
+		Records:      []Record{{Value: []byte("x")}},
+		RecordCount:  1,
 	}
 	encoded, _ := EncodeBatch(batch, nil)
 
@@ -139,14 +215,14 @@ func TestDecodeBatchCRCMismatch(t *testing.T) {
 
 func TestLZ4RoundTrip(t *testing.T) {
 	batch := &RecordBatch{
-		Compression: CompressionLZ4,
-		Timestamp:   999,
+		Compression:  CompressionLZ4,
+		Timestamp:    999,
 		MaxTimestamp: 999,
-		RecordCount: 3,
+		RecordCount:  3,
 		Records: []Record{
-			{Key: []byte("a"), Value: []byte("hello world hello world hello world")},
-			{Key: []byte("b"), Value: []byte("repeating data repeating data repeating data")},
-			{Key: nil, Value: []byte("compressed message")},
+			{OffsetDelta: 0, Key: []byte("a"), Value: []byte("hello world hello world hello world")},
+			{OffsetDelta: 1, Key: []byte("b"), Value: []byte("repeating data repeating data repeating data")},
+			{OffsetDelta: 2, Key: nil, Value: []byte("compressed message")},
 		},
 	}
 
