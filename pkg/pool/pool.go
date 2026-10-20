@@ -1,4 +1,5 @@
-package calibrated
+// Package pool provides calibrated size-class pools for reusable values.
+package pool
 
 import (
 	"sort"
@@ -7,29 +8,31 @@ import (
 )
 
 const (
-	MinBitSize = 6  // 64 bytes (CPU cache line)
-	Steps      = 20 // 64B to 32MB
+	minBitSize  = 6
+	sizeClasses = 20
+	minSize     = 1 << minBitSize
+	maxSize     = 1 << (minBitSize + sizeClasses - 1)
 
-	MinSize = 1 << MinBitSize
-	MaxSize = 1 << (MinBitSize + Steps - 1)
-
-	CalibrateThreshold = 42000
-	Percentile95       = 0.95
+	calibrateThreshold = 42000
+	percentile95       = 0.95
 )
 
-// Pool is a generic calibrated pool with size buckets.
+// PoolStats reports Put counts per size class.
+type PoolStats [sizeClasses]uint64
+
+// Pool is a concurrency-safe pool grouped by size class.
 type Pool[T any] struct {
-	calls       [Steps]uint64
+	calls       [sizeClasses]uint64
 	calibrating uint64
 	defaultSize uint64
 	maxSize     uint64
-	buckets     [Steps]sync.Pool
+	buckets     [sizeClasses]sync.Pool
 	newFunc     func(size int) T
 	sizeFunc    func(T) int
 	resetFunc   func(T)
 }
 
-// New creates a new calibrated pool.
+// New creates a pool using the supplied creation, sizing, and reset functions.
 func New[T any](newFunc func(size int) T, sizeFunc func(T) int, resetFunc func(T)) *Pool[T] {
 	p := &Pool[T]{
 		newFunc:   newFunc,
@@ -37,7 +40,7 @@ func New[T any](newFunc func(size int) T, sizeFunc func(T) int, resetFunc func(T
 		resetFunc: resetFunc,
 	}
 	for i := range p.buckets {
-		size := MinSize << i
+		size := minSize << i
 		p.buckets[i].New = func() any {
 			return newFunc(size)
 		}
@@ -45,33 +48,33 @@ func New[T any](newFunc func(size int) T, sizeFunc func(T) int, resetFunc func(T
 	return p
 }
 
-// Get returns an item of at least the given size.
+// Get returns a value sized for at least size.
 func (p *Pool[T]) Get(size int) T {
 	if size <= 0 {
-		size = MinSize
+		size = minSize
 	}
 
-	idx := SizeToIndex(size)
-	if idx >= Steps {
+	index := SizeToIndex(size)
+	if index >= sizeClasses {
 		return p.newFunc(size)
 	}
 
-	return p.buckets[idx].Get().(T)
+	return p.buckets[index].Get().(T)
 }
 
-// Put returns an item to the pool.
-func (p *Pool[T]) Put(item T) {
-	size := p.sizeFunc(item)
-	if size == 0 {
+// Put returns a value to the pool.
+func (p *Pool[T]) Put(value T) {
+	size := p.sizeFunc(value)
+	if size <= 0 {
 		return
 	}
 
-	idx := SizeToIndex(size)
-	if idx >= Steps {
+	index := SizeToIndex(size)
+	if index >= sizeClasses {
 		return
 	}
 
-	if atomic.AddUint64(&p.calls[idx], 1) > CalibrateThreshold {
+	if atomic.AddUint64(&p.calls[index], 1) > calibrateThreshold {
 		p.calibrate()
 	}
 
@@ -81,12 +84,11 @@ func (p *Pool[T]) Put(item T) {
 	}
 
 	if p.resetFunc != nil {
-		p.resetFunc(item)
+		p.resetFunc(value)
 	}
-	p.buckets[idx].Put(item)
+	p.buckets[index].Put(value)
 }
 
-// calibrate analyzes usage patterns and adjusts default/max sizes.
 func (p *Pool[T]) calibrate() {
 	if !atomic.CompareAndSwapUint64(&p.calibrating, 0, 1) {
 		return
@@ -99,10 +101,10 @@ func (p *Pool[T]) calibrate() {
 }
 
 func (p *Pool[T]) collectStats() bucketStats {
-	stats := make(bucketStats, 0, Steps)
-	for i := uint64(0); i < Steps; i++ {
+	stats := make(bucketStats, 0, sizeClasses)
+	for i := uint64(0); i < sizeClasses; i++ {
 		calls := atomic.SwapUint64(&p.calls[i], 0)
-		stats = append(stats, bucket{calls: calls, size: MinSize << i})
+		stats = append(stats, bucket{calls: calls, size: minSize << i})
 	}
 	return stats
 }
@@ -116,18 +118,18 @@ func (p *Pool[T]) updateSizes(stats bucketStats) {
 	maxSize := defaultSize
 
 	var total, sum uint64
-	for _, s := range stats {
-		total += s.calls
+	for _, stat := range stats {
+		total += stat.calls
 	}
-	threshold := uint64(float64(total) * Percentile95)
+	threshold := uint64(float64(total) * percentile95)
 
-	for _, s := range stats {
+	for _, stat := range stats {
 		if sum > threshold {
 			break
 		}
-		sum += s.calls
-		if s.size > maxSize {
-			maxSize = s.size
+		sum += stat.calls
+		if stat.size > maxSize {
+			maxSize = stat.size
 		}
 	}
 
@@ -135,23 +137,23 @@ func (p *Pool[T]) updateSizes(stats bucketStats) {
 	atomic.StoreUint64(&p.maxSize, maxSize)
 }
 
-// DefaultSize returns the calibrated default size.
+// DefaultSize returns the most used size class.
 func (p *Pool[T]) DefaultSize() uint64 {
 	return atomic.LoadUint64(&p.defaultSize)
 }
 
-// MaxSize returns the calibrated max size.
+// MaxSize returns the largest retained size class.
 func (p *Pool[T]) MaxSize() uint64 {
 	return atomic.LoadUint64(&p.maxSize)
 }
 
-// GetStats returns allocation counts per bucket.
-func (p *Pool[T]) GetStats() [Steps]uint64 {
-	var result [Steps]uint64
+// GetStats returns Put counts since calibration.
+func (p *Pool[T]) GetStats() PoolStats {
+	var stats PoolStats
 	for i := range p.calls {
-		result[i] = atomic.LoadUint64(&p.calls[i])
+		stats[i] = atomic.LoadUint64(&p.calls[i])
 	}
-	return result
+	return stats
 }
 
 type bucket struct {
@@ -165,22 +167,22 @@ func (b bucketStats) Len() int           { return len(b) }
 func (b bucketStats) Less(i, j int) bool { return b[i].calls > b[j].calls }
 func (b bucketStats) Swap(i, j int)      { b[i], b[j] = b[j], b[i] }
 
-// SizeToIndex returns the bucket index for a given size.
+// SizeToIndex returns the size-class index for n.
 func SizeToIndex(n int) int {
 	n--
-	n >>= MinBitSize
-	idx := 0
+	n >>= minBitSize
+	index := 0
 	for n > 0 {
 		n >>= 1
-		idx++
+		index++
 	}
-	return idx
+	return index
 }
 
-// BucketSize returns the size of bucket at index i.
-func BucketSize(i int) int {
-	if i < 0 || i >= Steps {
+// BucketSize returns a bucket's size, or zero for an invalid index.
+func BucketSize(index int) int {
+	if index < 0 || index >= sizeClasses {
 		return 0
 	}
-	return MinSize << i
+	return minSize << index
 }
