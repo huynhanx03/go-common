@@ -16,8 +16,15 @@ const (
 // CircuitBreakerMiddleware wraps a route group with a circuit breaker.
 // When the downstream error rate exceeds the threshold, the circuit opens
 // and immediately returns 503 Service Unavailable without calling the handler.
+//
+// Deprecated: inbound global circuit breakers couple unrelated requests.
+// Apply a circuit breaker to one named outbound dependency instead.
 func CircuitBreakerMiddleware(cb *algorithm.CircuitBreaker) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if cb == nil {
+			internalServerError(c)
+			return
+		}
 		if err := cb.Allow(); err != nil {
 			response.ErrorResponse(c, apperr.CodeInternalServer, apperr.New(
 				apperr.CodeInternalServer,

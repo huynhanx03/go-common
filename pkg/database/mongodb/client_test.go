@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"os"
 	"os/exec"
 	"strconv"
 	"testing"
@@ -33,8 +34,8 @@ type TestModel struct {
 }
 
 func TestClient_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
+	if testing.Short() || os.Getenv("GO_COMMON_INTEGRATION") != "1" {
+		t.Skip("set GO_COMMON_INTEGRATION=1 to run container integration tests")
 	}
 
 	ctx := context.Background()

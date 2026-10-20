@@ -3,6 +3,7 @@ package kafka
 import (
 	"context"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 )
@@ -18,8 +19,8 @@ const (
 )
 
 func TestClient_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
+	if testing.Short() || os.Getenv("GO_COMMON_INTEGRATION") != "1" {
+		t.Skip("set GO_COMMON_INTEGRATION=1 to run container integration tests")
 	}
 
 	// Used global integrationBrokers set by TestMain

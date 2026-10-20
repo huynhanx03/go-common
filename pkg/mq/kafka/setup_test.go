@@ -18,6 +18,10 @@ var (
 )
 
 func TestMain(m *testing.M) {
+	if os.Getenv("GO_COMMON_INTEGRATION") != "1" {
+		os.Exit(m.Run())
+	}
+
 	// Check if Docker is available
 	ctx := context.Background()
 	if !isDockerRunning(ctx) {

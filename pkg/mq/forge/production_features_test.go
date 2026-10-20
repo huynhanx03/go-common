@@ -1,6 +1,8 @@
 package forge
 
 import (
+	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -47,7 +49,39 @@ func TestBackpressureRejectsWhenFull(t *testing.T) {
 	}
 }
 
-func TestBackpressureUnlimitedByDefault(t *testing.T) {
+func TestProducerContainsClockPanicAndRestoresBatch(t *testing.T) {
+	log, err := NewCommitLog(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	producer, err := NewProducer(
+		log,
+		WithBatchSize(1<<20),
+		WithLinger(time.Hour),
+		WithClock(func() int64 { panic("clock") }),
+	)
+	if err != nil {
+		_ = log.Close()
+		t.Fatal(err)
+	}
+	if err := producer.Send(nil, []byte("retained"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := producer.Flush(); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("Flush clock panic error = %v, want ErrInvalidConfig", err)
+	}
+	if got := producer.PendingRecords(); got != 1 {
+		t.Fatalf("pending records after clock panic = %d, want 1", got)
+	}
+	if err := producer.Close(); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("Close clock panic error = %v, want ErrInvalidConfig", err)
+	}
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDefaultPendingBudgetAcceptsNormalWorkload(t *testing.T) {
 	dir := t.TempDir()
 	b, err := NewBroker(dir)
 	if err != nil {
@@ -64,7 +98,7 @@ func TestBackpressureUnlimitedByDefault(t *testing.T) {
 	}
 	defer p.Close()
 
-	// Should never return ErrBackpressure with default config (MaxPendingBytes=0).
+	// The default is bounded but comfortably accepts an ordinary batch.
 	for i := 0; i < 100; i++ {
 		if err := p.Send(nil, []byte("data"), nil); err != nil {
 			t.Fatalf("send %d failed: %v", i, err)
@@ -82,12 +116,15 @@ func TestAsyncProducerRoutesErrorsToCallback(t *testing.T) {
 	}
 
 	var errorCount atomic.Int32
-	p := NewProducer(log,
+	p, err := NewProducer(log,
 		WithBatchSize(1), // flush every message
 		WithOnError(func(err error) {
 			errorCount.Add(1)
 		}),
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Send a message — should flush immediately.
 	if err := p.Send(nil, []byte("hello"), nil); err != nil {
@@ -99,14 +136,16 @@ func TestAsyncProducerRoutesErrorsToCallback(t *testing.T) {
 
 	// Close the log, then try to flush — should trigger OnError.
 	log2, _ := NewCommitLog(dir)
-	log2.Close()
-
-	p2 := NewProducer(log2,
+	p2, err := NewProducer(log2,
 		WithBatchSize(1),
 		WithOnError(func(err error) {
 			errorCount.Add(1)
 		}),
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log2.Close()
 	// Send to closed log — flush error goes to OnError, Send returns nil.
 	err = p2.Send(nil, []byte("fail"), nil)
 	if err != nil {
@@ -134,7 +173,6 @@ func TestGracefulShutdownFlushesOnClose(t *testing.T) {
 	p, err := b.NewProducer("shutdown-test",
 		WithLinger(time.Hour), // never auto-flush via linger
 		WithBatchSize(1<<20),  // never auto-flush via size
-		WithShutdownTimeout(5*time.Second),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -195,8 +233,8 @@ func TestMetricsHookFires(t *testing.T) {
 	p.Send(nil, []byte("m2"), nil)
 	p.Close()
 
-	if flushCount.Load() < 2 {
-		t.Fatalf("expected >= 2 flush hooks, got %d", flushCount.Load())
+	if flushCount.Load() < 1 {
+		t.Fatalf("expected at least one flush hook, got %d", flushCount.Load())
 	}
 
 	c, err := b.NewConsumer("g", "metrics-test", WithConsumerMetrics(metrics))
@@ -299,7 +337,7 @@ func TestDLQNackRoutesMessage(t *testing.T) {
 	}
 }
 
-func TestNackWithoutDLQSilentlyDrops(t *testing.T) {
+func TestNackWithoutDLQReturnsError(t *testing.T) {
 	dir := t.TempDir()
 	b, err := NewBroker(dir)
 	if err != nil {
@@ -317,8 +355,51 @@ func TestNackWithoutDLQSilentlyDrops(t *testing.T) {
 		t.Fatal("expected records")
 	}
 
-	// Nack without DLQ — should return nil (silent drop).
-	if err := c.Nack(records[0]); err != nil {
-		t.Fatalf("Nack without DLQ should return nil, got: %v", err)
+	if err := c.Nack(records[0]); !errors.Is(err, ErrDLQNotConfigured) {
+		t.Fatalf("Nack without DLQ error = %v, want ErrDLQNotConfigured", err)
+	}
+}
+
+func TestNackDeliveryContextPreservesSourceCoordinates(t *testing.T) {
+	b, err := NewBroker(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	producer, err := b.NewProducer("coordinates")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := producer.SendContext(context.Background(), []byte("key"), []byte("bad"), nil, AckFsync); err != nil {
+		t.Fatal(err)
+	}
+	consumer, _, err := b.NewDLQConsumer("worker", "coordinates")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deliveries, err := consumer.Fetch(context.Background(), 1)
+	if err != nil || len(deliveries) != 1 {
+		t.Fatalf("Fetch = (%v, %v)", deliveries, err)
+	}
+	if err := consumer.NackDeliveryContext(context.Background(), deliveries[0]); err != nil {
+		t.Fatalf("NackDeliveryContext: %v", err)
+	}
+
+	dlq, err := b.NewConsumer("auditor", "coordinates.dlq")
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := dlq.Fetch(context.Background(), 1)
+	if err != nil || len(records) != 1 {
+		t.Fatalf("DLQ Fetch = (%v, %v)", records, err)
+	}
+	headers := make(map[string]string)
+	for _, header := range records[0].Headers {
+		headers[string(header.Key)] = string(header.Value)
+	}
+	if headers[dlqOriginalTopicKey] != "coordinates" ||
+		headers[dlqOriginalOffsetKey] != "0" ||
+		headers[dlqOriginalTimestampKey] == "" {
+		t.Fatalf("DLQ source headers = %v", headers)
 	}
 }

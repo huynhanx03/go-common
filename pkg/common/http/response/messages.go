@@ -41,4 +41,5 @@ var Msg = map[int]string{
 	apperr.CodeDatabaseError:  "Database error",
 	apperr.CodeMongoDBError:   "MongoDB error",
 	apperr.CodeRedisError:     "Redis error",
+	apperr.CodeGatewayTimeout: "Request deadline exceeded",
 }

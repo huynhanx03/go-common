@@ -1,16 +1,18 @@
 package forge
 
 import (
+	"errors"
 	"fmt"
+	"io"
+	"math"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/huynhanx03/go-common/pkg/common/locks"
 )
 
 // encodeDstPool reuses destination buffers for EncodeBatch to eliminate per-Append allocation.
@@ -24,30 +26,42 @@ var encodeDstPool = sync.Pool{
 // CommitLog is an append-only log composed of rolling segments.
 // It is the core storage engine for Forge MQ.
 type CommitLog struct {
-	mu            locks.RWSpinLocker
+	mu            sync.RWMutex
 	dir           string
 	segments      []*segment
 	activeSegment *segment
 	nextOffset    atomic.Uint64
 	config        Config
 	closed        bool
+	dirDirty      bool
+	storageErr    error
+	closeErr      error
 }
 
 // NewCommitLog opens or creates a commit log in the given directory.
 func NewCommitLog(dir string, opts ...Option) (*CommitLog, error) {
+	if dir == "" {
+		return nil, fmt.Errorf("%w: commit-log directory", ErrInvalidConfig)
+	}
 	cfg := defaultConfig()
 	for _, o := range opts {
-		o(&cfg)
+		if err := applyOption(o, &cfg); err != nil {
+			return nil, err
+		}
+	}
+	cfg.fileOps = cfg.fileOps.withDefaults()
+	if err := cfg.validate(); err != nil {
+		return nil, err
 	}
 
-	if err := os.MkdirAll(dir, dirPerm); err != nil {
+	if err := ensurePrivateDirectory(dir); err != nil {
 		return nil, fmt.Errorf("forge: mkdir %s: %w", dir, err)
 	}
+	if err := cfg.fileOps.syncDir(filepath.Dir(dir)); err != nil {
+		return nil, fmt.Errorf("forge: sync commit-log parent: %w", err)
+	}
 
-	// Recover incomplete compact/merge operations from a prior crash.
-	recoverStaging(dir)
-
-	cl := &CommitLog{mu: locks.NewRWSpinLock(), dir: dir, config: cfg}
+	cl := &CommitLog{dir: dir, config: cfg, dirDirty: true}
 	if err := cl.loadSegments(); err != nil {
 		return nil, err
 	}
@@ -62,7 +76,7 @@ func NewCommitLog(dir string, opts ...Option) (*CommitLog, error) {
 	cl.activeSegment = cl.segments[len(cl.segments)-1]
 	cl.nextOffset.Store(cl.activeSegment.nextOffset)
 
-	// Seal all historical segments for zero-copy mmap reads.
+	// Seal all historical segments for mmap-backed reads with owned outputs.
 	for _, seg := range cl.segments[:len(cl.segments)-1] {
 		seg.seal()
 	}
@@ -72,22 +86,44 @@ func NewCommitLog(dir string, opts ...Option) (*CommitLog, error) {
 
 // loadSegments discovers and opens existing .log files in the directory.
 func (cl *CommitLog) loadSegments() error {
-	entries, err := os.ReadDir(cl.dir)
-	if err != nil {
-		return err
-	}
-
 	var baseOffsets []uint64
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), extLog) {
-			continue
+	logOffsets := make(map[uint64]struct{})
+	var totalLogBytes int64
+	if err := forEachDirectoryEntry(cl.dir, func(e os.DirEntry) error {
+		if e.IsDir() {
+			return nil
 		}
-		name := strings.TrimSuffix(e.Name(), extLog)
-		off, err := strconv.ParseUint(name, 10, 64)
+		var suffix string
+		switch {
+		case strings.HasSuffix(e.Name(), extLog):
+			suffix = extLog
+		case strings.HasSuffix(e.Name(), extIndex):
+			suffix = extIndex
+		default:
+			return nil
+		}
+		offset, err := canonicalSegmentOffset(e.Name(), suffix)
 		if err != nil {
-			continue
+			return err
 		}
-		baseOffsets = append(baseOffsets, off)
+		if suffix == extLog {
+			if len(baseOffsets) >= maxSegmentsPerTopic {
+				return ErrStorageFull
+			}
+			info, err := e.Info()
+			if err != nil {
+				return err
+			}
+			if info.Size() < 0 || totalLogBytes > cl.config.MaxStorageBytes-info.Size() {
+				return ErrStorageFull
+			}
+			totalLogBytes += info.Size()
+			logOffsets[offset] = struct{}{}
+			baseOffsets = append(baseOffsets, offset)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	sort.Slice(baseOffsets, func(i, j int) bool { return baseOffsets[i] < baseOffsets[j] })
@@ -95,21 +131,127 @@ func (cl *CommitLog) loadSegments() error {
 	for _, bo := range baseOffsets {
 		seg, err := openSegment(cl.dir, bo, cl.config)
 		if err != nil {
+			cl.closeLoadedSegments()
 			return fmt.Errorf("forge: load segment %d: %w", bo, err)
 		}
+		if len(cl.segments) > 0 {
+			previous := cl.segments[len(cl.segments)-1]
+			if previous.nextOffset != bo {
+				_ = seg.Close()
+				cl.closeLoadedSegments()
+				return fmt.Errorf(
+					"%w: segment %d follows offset %d",
+					ErrInvalidSegmentLayout,
+					bo,
+					previous.nextOffset,
+				)
+			}
+		}
 		cl.segments = append(cl.segments, seg)
+	}
+
+	// Indexes are disposable. Remove indexes without an authoritative log so a
+	// crash in an older retention implementation cannot block startup forever.
+	removedOrphan := false
+	if err := forEachDirectoryEntry(cl.dir, func(entry os.DirEntry) error {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), extIndex) {
+			return nil
+		}
+		offset, err := canonicalSegmentOffset(entry.Name(), extIndex)
+		if err != nil {
+			return err
+		}
+		if _, exists := logOffsets[offset]; exists {
+			return nil
+		}
+		if err := cl.config.fileOps.remove(filepath.Join(cl.dir, entry.Name())); err != nil &&
+			!errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		removedOrphan = true
+		return nil
+	}); err != nil {
+		cl.closeLoadedSegments()
+		return err
+	}
+	if removedOrphan {
+		if err := cl.config.fileOps.syncDir(cl.dir); err != nil {
+			cl.closeLoadedSegments()
+			return err
+		}
 	}
 	return nil
 }
 
+func forEachDirectoryEntry(path string, visit func(os.DirEntry) error) error {
+	return forEachDirectoryEntryLimit(path, maximumDirectoryEntries, visit)
+}
+
+func forEachDirectoryEntryLimit(
+	path string,
+	maximum int,
+	visit func(os.DirEntry) error,
+) error {
+	if maximum <= 0 || visit == nil {
+		return ErrInvalidConfig
+	}
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	visited := 0
+	for {
+		entries, readErr := directory.ReadDir(maxSegmentsPerTopic * 2)
+		for _, entry := range entries {
+			if visited >= maximum {
+				return ErrResourceLimit
+			}
+			visited++
+			if err := visit(entry); err != nil {
+				return err
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			return nil
+		}
+		if readErr != nil {
+			return readErr
+		}
+	}
+}
+
+func canonicalSegmentOffset(filename, suffix string) (uint64, error) {
+	name := strings.TrimSuffix(filename, suffix)
+	if len(name) != 20 {
+		return 0, fmt.Errorf("%w: noncanonical filename", ErrInvalidSegmentLayout)
+	}
+	offset, err := strconv.ParseUint(name, 10, 64)
+	if err != nil || fmt.Sprintf(segmentNameFmt, offset) != name {
+		return 0, fmt.Errorf("%w: noncanonical filename", ErrInvalidSegmentLayout)
+	}
+	return offset, nil
+}
+
+func (cl *CommitLog) closeLoadedSegments() {
+	for _, segment := range cl.segments {
+		_ = segment.Close()
+	}
+	cl.segments = nil
+}
+
 // newSegment creates and appends a new segment with the given base offset.
 func (cl *CommitLog) newSegment(baseOffset uint64) error {
+	if len(cl.segments) >= maxSegmentsPerTopic {
+		return ErrStorageFull
+	}
 	seg, err := openSegment(cl.dir, baseOffset, cl.config)
 	if err != nil {
 		return err
 	}
 	cl.segments = append(cl.segments, seg)
 	cl.activeSegment = seg
+	cl.dirDirty = true
 	return nil
 }
 
@@ -122,6 +264,12 @@ func (cl *CommitLog) Append(batch *RecordBatch) (uint64, error) {
 	if cl.closed {
 		return 0, ErrClosed
 	}
+	if cl.storageErr != nil {
+		return 0, cl.storageErr
+	}
+	if batch == nil || len(batch.Records) == 0 {
+		return 0, ErrEmptyBatch
+	}
 
 	if len(batch.Records) > maxRecordsPerBatch {
 		return 0, ErrBatchTooLarge
@@ -129,6 +277,16 @@ func (cl *CommitLog) Append(batch *RecordBatch) (uint64, error) {
 
 	// Assign offsets.
 	base := cl.nextOffset.Load()
+	recordCount := uint64(len(batch.Records))
+	if base > math.MaxUint64-recordCount {
+		return 0, ErrInvalidSegmentLayout
+	}
+	for _, record := range batch.Records {
+		recordSize, err := encodedRecordSize(record)
+		if err != nil || recordSize > cl.config.MaxMessageSize {
+			return 0, ErrMessageTooLarge
+		}
+	}
 	batch.BaseOffset = base
 	for i := range batch.Records {
 		batch.Records[i].OffsetDelta = int64(i)
@@ -143,9 +301,15 @@ func (cl *CommitLog) Append(batch *RecordBatch) (uint64, error) {
 		encodeDstPool.Put(dstPtr)
 		return 0, err
 	}
+	if cl.totalLogBytesLocked() > cl.config.MaxStorageBytes-int64(len(encoded)) {
+		*dstPtr = encoded[:0]
+		encodeDstPool.Put(dstPtr)
+		return 0, ErrStorageFull
+	}
 
 	// Roll segment if full — seal old one for mmap reads.
-	if cl.activeSegment.IsFull() {
+	if cl.activeSegment.IsFull() ||
+		!cl.activeSegment.canContainBatch(base, recordCount) {
 		cl.activeSegment.seal()
 		if err := cl.newSegment(base); err != nil {
 			*dstPtr = encoded[:0]
@@ -157,6 +321,14 @@ func (cl *CommitLog) Append(batch *RecordBatch) (uint64, error) {
 	if err := cl.activeSegment.Append(encoded, batch); err != nil {
 		*dstPtr = encoded[:0]
 		encodeDstPool.Put(dstPtr)
+		var acknowledgmentError *AcknowledgmentError
+		if errors.As(err, &acknowledgmentError) && acknowledgmentError.Appended {
+			cl.nextOffset.Add(uint64(batch.RecordCount))
+			return base, err
+		}
+		if errors.Is(err, ErrInvalidSegmentLayout) {
+			return 0, cl.poisonStorageLocked(err)
+		}
 		return 0, err
 	}
 
@@ -168,15 +340,65 @@ func (cl *CommitLog) Append(batch *RecordBatch) (uint64, error) {
 	return base, nil
 }
 
-// Read returns batches starting at offset, up to maxBytes of log data.
+func (cl *CommitLog) totalLogBytesLocked() int64 {
+	var total int64
+	for _, segment := range cl.segments {
+		total += segment.size
+	}
+	return total
+}
+
+// Sync fsyncs every dirty segment and newly created directory entry. Clean
+// historical segments are skipped, while dirty predecessors remain part of
+// the durability barrier so recovery cannot observe a durable offset gap.
+func (cl *CommitLog) Sync() error {
+	cl.mu.Lock()
+	defer cl.mu.Unlock()
+	if cl.closed {
+		return ErrClosed
+	}
+	if cl.storageErr != nil {
+		return cl.storageErr
+	}
+	for _, segment := range cl.segments {
+		if err := segment.Sync(); err != nil {
+			return err
+		}
+	}
+	if cl.dirDirty {
+		if err := cl.config.fileOps.syncDir(cl.dir); err != nil {
+			return err
+		}
+		cl.dirDirty = false
+	}
+	return nil
+}
+
+// Read returns batches starting at offset, up to maxBytes of log data. It
+// returns ErrOffsetNotFound when offset is outside the retained range; the
+// current next offset is a valid empty read.
 func (cl *CommitLog) Read(offset uint64, maxBytes int) ([]*RecordBatch, error) {
 	cl.mu.RLock()
 	defer cl.mu.RUnlock()
 
+	if maxBytes <= 0 || maxBytes > maxEncodedBatchBytes {
+		return nil, fmt.Errorf("%w: read byte limit", ErrInvalidConfig)
+	}
 	if cl.closed {
 		return nil, ErrClosed
 	}
+	if cl.storageErr != nil {
+		return nil, cl.storageErr
+	}
 	if len(cl.segments) == 0 {
+		return nil, nil
+	}
+	oldest := cl.oldestOffsetLocked()
+	newest := cl.nextOffset.Load()
+	if offset < oldest || offset > newest {
+		return nil, ErrOffsetNotFound
+	}
+	if offset == newest {
 		return nil, nil
 	}
 
@@ -211,6 +433,10 @@ func (cl *CommitLog) findSegment(offset uint64) *segment {
 func (cl *CommitLog) OldestOffset() uint64 {
 	cl.mu.RLock()
 	defer cl.mu.RUnlock()
+	return cl.oldestOffsetLocked()
+}
+
+func (cl *CommitLog) oldestOffsetLocked() uint64 {
 	if len(cl.segments) == 0 {
 		return 0
 	}
@@ -226,18 +452,40 @@ func (cl *CommitLog) NewestOffset() uint64 {
 func (cl *CommitLog) DeleteBefore(offset uint64) error {
 	cl.mu.Lock()
 	defer cl.mu.Unlock()
+	if cl.closed {
+		return ErrClosed
+	}
+	if cl.storageErr != nil {
+		return cl.storageErr
+	}
 
-	var keep []*segment
-	for _, seg := range cl.segments {
+	keep := make([]*segment, 0, len(cl.segments))
+	removed := false
+	for index, seg := range cl.segments {
 		if seg.nextOffset <= offset && seg != cl.activeSegment {
 			if err := seg.Remove(); err != nil {
-				return err
+				// Remove closes the segment before unlinking it. Exclude a
+				// partially removed segment from the live slice so subsequent
+				// reads never target closed files; a restart may safely discover
+				// any leftover fully-consumed file again.
+				keep = append(keep, cl.segments[index+1:]...)
+				cl.segments = keep
+				return cl.poisonStorageLocked(errors.Join(
+					err,
+					cl.config.fileOps.syncDir(cl.dir),
+				))
 			}
+			removed = true
 		} else {
 			keep = append(keep, seg)
 		}
 	}
 	cl.segments = keep
+	if removed {
+		if err := cl.config.fileOps.syncDir(cl.dir); err != nil {
+			return cl.poisonStorageLocked(err)
+		}
+	}
 	return nil
 }
 
@@ -245,7 +493,30 @@ func (cl *CommitLog) DeleteBefore(offset uint64) error {
 func (cl *CommitLog) EnforceRetention() error {
 	cl.mu.Lock()
 	defer cl.mu.Unlock()
+	if cl.closed {
+		return ErrClosed
+	}
+	if cl.storageErr != nil {
+		return cl.storageErr
+	}
+	return cl.enforceRetentionLocked(0, false)
+}
 
+// EnforceRetentionBefore applies time/size retention only to sealed segments
+// whose records are entirely below the slowest committed consumer offset.
+func (cl *CommitLog) EnforceRetentionBefore(offset uint64) error {
+	cl.mu.Lock()
+	defer cl.mu.Unlock()
+	if cl.closed {
+		return ErrClosed
+	}
+	if cl.storageErr != nil {
+		return cl.storageErr
+	}
+	return cl.enforceRetentionLocked(offset, true)
+}
+
+func (cl *CommitLog) enforceRetentionLocked(protectedOffset uint64, protectConsumers bool) error {
 	cutoff := time.Now().UnixNano() - int64(cl.config.RetentionTime)
 
 	// Size-based: calculate total size.
@@ -254,23 +525,43 @@ func (cl *CommitLog) EnforceRetention() error {
 		totalSize += seg.size
 	}
 
-	var keep []*segment
-	for _, seg := range cl.segments {
+	keep := make([]*segment, 0, len(cl.segments))
+	removed := false
+	for index, seg := range cl.segments {
 		isActive := seg == cl.activeSegment
 		expired := seg.created < cutoff
 		overSize := totalSize > cl.config.RetentionBytes
+		fullyConsumed := !protectConsumers || seg.nextOffset <= protectedOffset
 
-		if !isActive && (expired || overSize) {
+		if !isActive && fullyConsumed && (expired || overSize) {
 			totalSize -= seg.size
 			if err := seg.Remove(); err != nil {
-				return err
+				keep = append(keep, cl.segments[index+1:]...)
+				cl.segments = keep
+				return cl.poisonStorageLocked(errors.Join(
+					err,
+					cl.config.fileOps.syncDir(cl.dir),
+				))
 			}
+			removed = true
 		} else {
 			keep = append(keep, seg)
 		}
 	}
 	cl.segments = keep
+	if removed {
+		if err := cl.config.fileOps.syncDir(cl.dir); err != nil {
+			return cl.poisonStorageLocked(err)
+		}
+	}
 	return nil
+}
+
+func (cl *CommitLog) poisonStorageLocked(cause error) error {
+	if cl.storageErr == nil {
+		cl.storageErr = errors.Join(ErrStorageUnavailable, cause)
+	}
+	return cl.storageErr
 }
 
 // Close flushes and closes all segments.
@@ -279,7 +570,7 @@ func (cl *CommitLog) Close() error {
 	defer cl.mu.Unlock()
 
 	if cl.closed {
-		return nil
+		return cl.closeErr
 	}
 	cl.closed = true
 
@@ -289,5 +580,10 @@ func (cl *CommitLog) Close() error {
 			firstErr = err
 		}
 	}
-	return firstErr
+	if err := cl.config.fileOps.syncDir(cl.dir); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	cl.dirDirty = false
+	cl.closeErr = firstErr
+	return cl.closeErr
 }

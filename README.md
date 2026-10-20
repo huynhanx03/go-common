@@ -1,109 +1,113 @@
-# Project
+# go-common
 
-A shared library built on **Hexagonal Architecture** principles, designed to provide production-ready components that keep your business logic isolated from infrastructure concerns.
+`go-common` is a production-oriented Go library of reusable infrastructure
+primitives. It provides bounded, context-aware building blocks for security,
+correlation, lifecycle, health, transports, persistence integration,
+concurrency, and messaging while leaving business policy to each consuming
+application.
 
+The module is intentionally domain-neutral. It does not define application
+entities, event schemas, worker names, authorization vocabulary, database
+tables, or service orchestration.
 
-## Table of Contents
+## Install
 
-1. [Why Hexagonal Architecture?](#1-why-hexagonal-architecture)
-2. [Core Concepts](#2-core-concepts)
-   1. [Application](#21-application)
-   2. [Ports](#22-ports)
-   3. [Adapters](#23-adapters)
-   4. [Actors](#24-actors)
-3. [Project Structure](#3-project-structure)
-4. [Benefits](#4-benefits)
+Release consumers should depend on a semantic tag:
 
+```text
+go get github.com/huynhanx03/go-common@v1
+```
 
-## 1. Why Hexagonal Architecture?
+Import only the focused packages a component needs. Local multi-module
+development can use `go.work`; a published module must not depend on a
+filesystem `replace` outside this repository.
 
-When developing microservices, we often face these challenges:
+## Library boundaries
 
-| Problem | Consequence |
-|---------|-------------|
-| **Tight Coupling** | Changing database or framework requires rewriting business logic |
-| **Hard to Test** | Business logic is tangled with HTTP handlers, making unit tests painful |
-| **Tech Lock-in** | Switching from MySQL to PostgreSQL, or REST to gRPC, becomes a nightmare |
-| **Inconsistent Patterns** | Each service invents its own error handling, response format, validation |
+The public surface is split by capability rather than by one application's
+architecture:
 
-**Hexagonal Architecture** (also known as *Ports and Adapters*) solves these by enforcing a clear separation between:
-- **What** your application does (business logic)
-- **How** it communicates with the outside world (adapters)
+| Capability | Packages |
+|---|---|
+| Process foundation | `pkg/common/lifecycle`, `pkg/common/health`, `pkg/common/observability`, `pkg/logger`, `pkg/settings`, `pkg/correlation` |
+| Security | `pkg/security/authentication`, `pkg/security/authorization`, `pkg/security/password`, `pkg/oauth` |
+| Transports | `pkg/common/http/...`, `pkg/common/grpc/...`, `pkg/common/websocket` |
+| Data boundaries | `pkg/common/tx`, `pkg/database/...`, `pkg/cdc` |
+| Messaging | `pkg/mq/forge`, `pkg/mq/outbox`, `pkg/mq/batcher`, `pkg/mq/kafka` |
+| Reusable core | `pkg/encoding/...`, `pkg/dto`, `pkg/unique`, `pkg/datastructs/...`, `pkg/pool/...`, `pkg/consistenthash` |
 
+Application repositories remain responsible for:
 
-## 2. Core Concepts
+- business models, use cases, schemas, routes, and event names;
+- concrete authorization resources/actions and administration workflows;
+- application-specific persistence adapters and transaction composition;
+- workers, process wiring, configuration values, rollout policy, and capacity
+  choices.
 
-![Hexagonal Architecture Overview](images/hexagonal_overview.png)
+Shared packages own generic contracts, validation, bounds, concurrency,
+failure classification, and lifecycle behavior: mechanisms, not application
+policy. Integrations cross the
+boundary through package-owned interfaces and neutral metadata.
 
-### 2.1. Application
+## Design contract
 
-The **core** of your service. It contains pure business logic with no knowledge of databases, HTTP, or any external technology. This isolation means:
-- Business rules are easy to understand and modify
-- Logic can be tested without spinning up infrastructure
-- The same logic can be reused across different interfaces
+Production-facing packages follow the same rules:
 
-### 2.2. Ports
+- accept `context.Context` for bounded or cancelable work;
+- expose stable sentinels or typed errors instead of requiring error-string
+  matching;
+- declare goroutine, buffer, data ownership, and shutdown semantics;
+- reject unsafe or unbounded input at trust boundaries;
+- preserve correlation metadata without treating it as identity;
+- keep secrets and opaque payloads out of logs;
+- avoid hidden global initialization and application imports.
 
-Ports are **contracts** (interfaces) that define how the application communicates with the outside world. There are two types:
+## Documentation
 
-| Type | Direction | Purpose |
-|------|-----------|---------|
-| **Primary Port** (Driver) | Inbound → | Defines what the application **offers** (use cases, handlers) |
-| **Secondary Port** (Driven) | ← Outbound | Defines what the application **needs** (repositories, caches) |
+- [v0 to v1 migration](docs/migration-v0-to-v1.md)
+- [Security model](docs/security.md)
+- [Lifecycle and health](docs/lifecycle.md)
+- [Observability primitives](docs/observability.md)
+- [gRPC server](docs/grpc.md)
+- [WebSocket operations](docs/websocket.md)
+- [Durable outbox relay](docs/outbox.md)
+- [Benchmark operations](docs/benchmarks.md)
+- [Consistent-hash placement](docs/consistenthash.md)
+- [Forge embedded queue](pkg/mq/forge/README.md)
 
-> **Why interfaces?** They allow you to swap implementations without touching business logic. Need Redis instead of Memcached? Just implement a new adapter.
-
-### 2.3. Adapters
-
-Adapters are **concrete implementations** that connect ports to real technology:
-
-- **Primary Adapters**: REST controllers, gRPC handlers, CLI commands — they *drive* the application
-- **Secondary Adapters**: MySQL repository, Redis cache, Kafka producer — they are *driven* by the application
-
-### 2.4. Actors
-
-Anything outside your application boundary:
-- **Driver Actors**: Web UI, Mobile App, External Services — they initiate requests
-- **Driven Actors**: Databases, Caches, Message Queues — they respond to requests
-
-
-## 3. Project Structure
-
-This directory tree illustrates how the project is organized to support the Hexagonal Architecture:
+## Repository layout
 
 ```text
 go-common/
-├── cmd/
-│   └── server/   # Entry point to start the application server.
-├── config/       # Configuration files and structure definitions.
-├── global/       # Shared global instances (e.g., logger, validator) used across the app.
-├── internal/
-│   ├── adapters/ # Concrete implementations of ports (REST, gRPC, DB adapters).
-│   ├── core/     # Pure domain logic and services.
-│   ├── ports/    # Interface definitions for core business logic.
-│   ├── di/       # Dependency injection wiring.
-│   ├── infrastructure/    # Infrastructure initialization.
-├── scripts/      # Automation scripts
-└── pkg/          # Public shared library 
+├── pkg/       # Public capability packages
+├── internal/  # Reserved for future private shared implementation
+├── cmd/       # Reserved for future executable commands
+├── docs/      # Compatibility and operating contracts
+├── scripts/   # Deterministic local/CI entry points
+└── .github/   # Continuous-integration workflows
 ```
 
-> **[Explore the Shared Library Documentation](pkg/README.md)**
+## Verification
 
+The default verification path is deterministic and does not require external
+services:
 
-## 4. Benefits
+```text
+make verify
+make coverage
+make test-race
+```
 
-### Isolation
+`make verify` checks formatting, vet, module integrity, workflow syntax, unit
+behavior, fuzz seed corpora, and documentation examples.
 
-Components are decoupled through interfaces. Changing the cache from Redis to Memcached doesn't touch your business logic — you implement a new adapter and swap it.
+Container-backed database and broker checks are opt-in so a single development
+machine can run the ordinary suite predictably:
 
-### Flexibility
+```text
+make test-integration
+```
 
-Technology choices become reversible decisions. Start with MySQL, migrate to PostgreSQL later. Expose REST now, add gRPC when needed. The core remains untouched.
-
-### Testability
-
-Business logic has no dependencies on infrastructure. Unit tests run fast with mock adapters. Integration tests can use testcontainers for real infrastructure.
-
-### Maintainability
-
-Clear boundaries mean multiple developers can work in parallel. One team builds the REST adapter while another implements the Kafka consumer — both depend only on the same port interface.
+Release automation also runs reachable-vulnerability analysis and captures a
+repeatable benchmark artifact. Performance results are evidence for regression
+review, not a cross-machine service-level guarantee.

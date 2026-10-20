@@ -1,6 +1,8 @@
 package workerpool
 
 import (
+	"fmt"
+	"runtime/debug"
 	"time"
 
 	"github.com/panjf2000/ants/v2"
@@ -14,15 +16,57 @@ type Logger = ants.Logger
 type Option func(opts *Options)
 
 func loadOptions(options ...Option) []ants.Option {
-	opts := new(Options)
-	for i := range options {
-		options[i](opts)
+	opts, _ := normalizeOptions(options...)
+	return vendorOptions(opts, opts.Nonblocking)
+}
+
+func loadBoundedOptions(options ...Option) ([]ants.Option, Options, error) {
+	opts, err := normalizeOptions(options...)
+	if err != nil {
+		return nil, Options{}, err
 	}
+	return vendorOptions(opts, true), opts, nil
+}
+
+func normalizeOptions(options ...Option) (Options, error) {
+	opts := Options{}
+	for i := range options {
+		if options[i] == nil {
+			return Options{}, ErrInvalidPoolOptions
+		}
+		options[i](&opts)
+	}
+	if opts.ExpiryDuration < 0 || opts.MaxBlockingTasks < 0 {
+		return Options{}, ErrInvalidPoolOptions
+	}
+	callerPanicHandler := opts.PanicHandler
+	opts.PanicHandler = func(recovered any) {
+		if callerPanicHandler != nil {
+			func() {
+				defer func() { _ = recover() }()
+				callerPanicHandler(recovered)
+			}()
+			return
+		}
+		stack := debug.Stack()
+		if len(stack) > 32<<10 {
+			stack = stack[:32<<10]
+		}
+		zap.L().Error(
+			"workerpool task panic recovered",
+			zap.String("panic_type", fmt.Sprintf("%T", recovered)),
+			zap.ByteString("stack", stack),
+		)
+	}
+	return opts, nil
+}
+
+func vendorOptions(opts Options, nonblocking bool) []ants.Option {
 	return []ants.Option{ants.WithOptions(ants.Options{
 		ExpiryDuration:   opts.ExpiryDuration,
 		PreAlloc:         opts.PreAlloc,
 		MaxBlockingTasks: opts.MaxBlockingTasks,
-		Nonblocking:      opts.Nonblocking,
+		Nonblocking:      nonblocking,
 		PanicHandler:     opts.PanicHandler,
 		Logger:           opts.Logger,
 		DisablePurge:     opts.DisablePurge,
@@ -97,6 +141,9 @@ func WithLogger(logger Logger) Option {
 
 // WithZapLogger routes pool logs to a zap logger.
 func WithZapLogger(l *zap.Logger) Option {
+	if l == nil {
+		l = zap.L()
+	}
 	return WithLogger(zapLogger{sugar: l.Sugar()})
 }
 

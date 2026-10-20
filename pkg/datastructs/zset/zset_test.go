@@ -82,19 +82,19 @@ func TestZSet_RevRange_DESC(t *testing.T) {
 	assertEqual(t, 200.0, result[1].Score)
 }
 
-func TestZSet_CompositeScore_ICPC(t *testing.T) {
+func TestZSet_CompositePriorityScore(t *testing.T) {
 	z := New()
 
-	// ICPC: score = solved * 1_000_000 - penalty
-	z.Add("user1", 3*1_000_000-900)  // solved=3, penalty=900
-	z.Add("user2", 4*1_000_000-1200) // solved=4, penalty=1200
-	z.Add("user3", 3*1_000_000-500)  // solved=3, penalty=500
+	// Composite score: priority is dominant and a lower sequence wins ties.
+	z.Add("item1", 3*1_000_000-900)
+	z.Add("item2", 4*1_000_000-1200)
+	z.Add("item3", 3*1_000_000-500)
 
 	top := z.RevRange(0, -1)
 	assertEqual(t, 3, len(top))
-	assertEqual(t, "user2", top[0].Key) // 4 solved
-	assertEqual(t, "user3", top[1].Key) // 3 solved, less penalty
-	assertEqual(t, "user1", top[2].Key) // 3 solved, more penalty
+	assertEqual(t, "item2", top[0].Key)
+	assertEqual(t, "item3", top[1].Key)
+	assertEqual(t, "item1", top[2].Key)
 }
 
 func TestZSet_IncrBy(t *testing.T) {
@@ -130,7 +130,7 @@ func TestZSet_LargeScale(t *testing.T) {
 	}
 	assertEqual(t, n, z.Card())
 
-	rank, ok := z.Rank(strconv.Itoa(n-1))
+	rank, ok := z.Rank(strconv.Itoa(n - 1))
 	assertTrue(t, ok)
 	assertEqual(t, n-1, rank)
 

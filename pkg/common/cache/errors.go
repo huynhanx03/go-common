@@ -3,6 +3,8 @@ package cache
 import "github.com/pkg/errors"
 
 var (
+	ErrInvalidConfig = errors.New("invalid cache configuration")
+
 	// ErrKeyNotFound reports a cache-layer miss: the cache key is absent.
 	ErrKeyNotFound = errors.New("key not found")
 

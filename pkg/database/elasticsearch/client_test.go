@@ -3,6 +3,7 @@ package elasticsearch
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"testing"
 	"time"
@@ -18,7 +19,7 @@ import (
 const (
 	elasticsearchImage = "elastic/elasticsearch:8.18.8"
 	elasticsearchPort  = "9200/tcp"
-	startupTimeout     = 60 * time.Second
+	startupTimeout     = 120 * time.Second
 )
 
 // TestDocument implements Document interface
@@ -29,8 +30,8 @@ type TestDocument struct {
 }
 
 func TestClient_Integration(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
+	if testing.Short() || os.Getenv("GO_COMMON_INTEGRATION") != "1" {
+		t.Skip("set GO_COMMON_INTEGRATION=1 to run container integration tests")
 	}
 
 	ctx := context.Background()
@@ -246,6 +247,10 @@ func setupElasticsearchContainer(ctx context.Context, t *testing.T) (string, fun
 		Env: map[string]string{
 			"discovery.type":         "single-node",
 			"xpack.security.enabled": "false",
+			// Elasticsearch sizes its heap from the Docker VM memory limit by
+			// default. Keep integration tests lightweight and deterministic on
+			// single-machine development environments.
+			"ES_JAVA_OPTS": "-Xms512m -Xmx512m",
 		},
 		ExposedPorts: []string{elasticsearchPort},
 		WaitingFor:   wait.ForHTTP("/_cluster/health").WithPort(elasticsearchPort).WithStartupTimeout(startupTimeout),

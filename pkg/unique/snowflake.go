@@ -2,10 +2,18 @@ package unique
 
 import (
 	"errors"
+	"math"
 	"sync"
 
 	"github.com/huynhanx03/go-common/pkg/settings"
 	t "github.com/huynhanx03/go-common/pkg/timer"
+)
+
+var (
+	ErrInvalidSnowflakeConfig = errors.New("invalid snowflake configuration")
+	ErrClockMovedBackward     = errors.New("snowflake clock moved backward")
+	ErrSequenceExhausted      = errors.New("snowflake sequence exhausted")
+	ErrTimestampOverflow      = errors.New("snowflake timestamp overflow")
 )
 
 // Node represents a Snowflake node
@@ -26,18 +34,29 @@ type SnowflakeNode struct {
 	stepMax   int64
 	timeShift uint8
 	nodeShift uint8
-	limitMask int64
+	timeMax   int64
 
 	// Dependencies
 	clock t.Timer
 }
 
 func NewSnowflakeNode(config settings.SnowflakeNode, clock t.Timer) (*SnowflakeNode, error) {
-	nodeMax := int64(-1 ^ (-1 << config.Config.Node))
-	stepMax := int64(-1 ^ (-1 << config.Config.Step))
+	if clock == nil ||
+		config.Config.Node == 0 ||
+		config.Config.Step == 0 ||
+		config.Config.Node >= 63 ||
+		config.Config.Step >= 63 ||
+		config.Config.Epoch < 0 {
+		return nil, ErrInvalidSnowflakeConfig
+	}
+	nodeMax := int64((uint64(1) << config.Config.Node) - 1)
+	stepMax := int64((uint64(1) << config.Config.Step) - 1)
 
 	if config.WorkerID < 0 || config.WorkerID > nodeMax {
-		return nil, errors.New("node ID exceeds maximum allowed by configuration")
+		return nil, errors.Join(
+			ErrInvalidSnowflakeConfig,
+			errors.New("worker ID outside configured node bits"),
+		)
 	}
 
 	totalBits := config.Config.TotalBits
@@ -45,19 +64,18 @@ func NewSnowflakeNode(config settings.SnowflakeNode, clock t.Timer) (*SnowflakeN
 		totalBits = 63
 	}
 
-	// Safety check
-	if totalBits <= config.Config.Node+config.Config.Step {
-		return nil, errors.New("total bits must be greater than node + step bits")
+	if totalBits > 63 ||
+		totalBits <= config.Config.Node+config.Config.Step {
+		return nil, ErrInvalidSnowflakeConfig
 	}
-
-	// Calculate limit mask
-	limitMask := int64(1)<<totalBits - 1
-	if totalBits == 63 || totalBits == 64 {
-		limitMask = int64(^uint64(0) >> 1)
+	timeBits := totalBits - config.Config.Node - config.Config.Step
+	if timeBits == 0 || timeBits >= 63 {
+		return nil, ErrInvalidSnowflakeConfig
 	}
+	timeMax := int64((uint64(1) << timeBits) - 1)
 
 	return &SnowflakeNode{
-		timestamp: 0,
+		timestamp: -1,
 		node:      config.WorkerID,
 		step:      0,
 
@@ -70,14 +88,17 @@ func NewSnowflakeNode(config settings.SnowflakeNode, clock t.Timer) (*SnowflakeN
 		stepMax:   stepMax,
 		timeShift: config.Config.Node + config.Config.Step,
 		nodeShift: config.Config.Step,
-		limitMask: limitMask,
+		timeMax:   timeMax,
 
 		clock: clock,
 	}, nil
 }
 
 // Generate creates a unique ID
-func (n *SnowflakeNode) Generate() int64 {
+func (n *SnowflakeNode) Generate() (int64, error) {
+	if n == nil || n.clock == nil {
+		return 0, ErrInvalidSnowflakeConfig
+	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
@@ -92,27 +113,27 @@ func (n *SnowflakeNode) Generate() int64 {
 	}
 
 	if now < n.timestamp {
-		now = n.timestamp
+		return 0, ErrClockMovedBackward
 	}
 
 	if now == n.timestamp {
-		n.step = (n.step + 1) & n.stepMax
-		if n.step == 0 {
-			for now <= n.timestamp {
-				nanos = n.clock.Now()
-				if n.totalBits < 50 {
-					now = nanos / 1e9
-				} else {
-					now = nanos / 1e6
-				}
-			}
+		if n.step >= n.stepMax {
+			return 0, ErrSequenceExhausted
 		}
+		n.step++
 	} else {
 		n.step = 0
 	}
 
+	elapsed := now - n.epoch
+	if elapsed < 0 || elapsed > n.timeMax {
+		return 0, ErrTimestampOverflow
+	}
 	n.timestamp = now
 
-	id := ((now - n.epoch) << n.timeShift) | (n.node << n.nodeShift) | n.step
-	return id & n.limitMask
+	id := (elapsed << n.timeShift) | (n.node << n.nodeShift) | n.step
+	if id < 0 || id > math.MaxInt64 {
+		return 0, ErrTimestampOverflow
+	}
+	return id, nil
 }

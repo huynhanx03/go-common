@@ -24,19 +24,12 @@ func CeilToPowerOfTwo(n int) int {
 	return 1 << bits.Len(uint(n-1))
 }
 
-// FloorToPowerOfTwo returns n if it is a power-of-two, otherwise the next-highest power-of-two.
+// FloorToPowerOfTwo returns n if it is a power-of-two, otherwise the next-lowest power-of-two.
 func FloorToPowerOfTwo(n int) int {
 	if n <= 2 {
 		return n
 	}
-
-	n |= n >> 1
-	n |= n >> 2
-	n |= n >> 4
-	n |= n >> 8
-	n |= n >> 16
-
-	return n - (n >> 1)
+	return 1 << (bits.Len(uint(n)) - 1)
 }
 
 // ClosestPowerOfTwo returns n if it is a power-of-two, otherwise the closest power-of-two.

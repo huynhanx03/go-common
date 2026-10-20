@@ -2,11 +2,20 @@ package forge
 
 import (
 	"encoding/binary"
+	"errors"
+	"io"
+	"math"
 	"os"
 	"sort"
 )
 
-const indexEntrySize = 12 // RelativeOffset(4) + Position(8)
+const (
+	indexEntrySize = 12 // RelativeOffset(4) + Position(8)
+	// maxIndexEntries bounds retained index memory for one topic/segment. The
+	// configuration validator applies the same ceiling conservatively to a
+	// topic's complete storage budget.
+	maxIndexEntries = 1 << 20
+)
 
 // indexEntry maps a relative offset to a byte position in the .log file.
 type indexEntry struct {
@@ -21,63 +30,69 @@ type index struct {
 	entries    []indexEntry
 	baseOffset uint64
 	dirtyFrom  int // entries[dirtyFrom:] not yet written to file
+	fileOps    fileOperations
+	needsSync  bool
 }
 
-// openIndex opens or creates an index file, loading existing entries into memory.
-func openIndex(path string, baseOffset uint64) (*index, error) {
+// openIndex opens or creates a rebuildable sparse index. The commit log is the
+// only authoritative storage, so startup discards the persisted index and
+// reconstructs it from verified batches. This also recovers safely from a
+// process crash in the middle of an index write.
+func openIndex(path string, baseOffset uint64, fileOps fileOperations) (*index, error) {
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, filePerm)
 	if err != nil {
+		return nil, err
+	}
+	if err := ensurePrivateFile(f); err != nil {
+		_ = f.Close()
 		return nil, err
 	}
 
 	idx := &index{
 		file:       f,
 		baseOffset: baseOffset,
+		fileOps:    fileOps.withDefaults(),
 	}
-
-	if err := idx.loadEntries(); err != nil {
+	if err := idx.resetForRecovery(); err != nil {
 		f.Close()
 		return nil, err
 	}
-	idx.dirtyFrom = len(idx.entries) // all loaded entries are already on disk
-
 	return idx, nil
 }
 
-// loadEntries reads all index entries from disk into memory.
-func (idx *index) loadEntries() error {
-	info, err := idx.file.Stat()
-	if err != nil {
+func (idx *index) resetForRecovery() error {
+	if err := idx.file.Truncate(0); err != nil {
 		return err
 	}
-	size := info.Size()
-	if size == 0 {
-		return nil
-	}
-
-	count := int(size / indexEntrySize)
-	buf := make([]byte, count*indexEntrySize)
-	if _, err := idx.file.ReadAt(buf, 0); err != nil {
+	if _, err := idx.file.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
-
-	idx.entries = make([]indexEntry, count)
-	for i := 0; i < count; i++ {
-		off := i * indexEntrySize
-		idx.entries[i] = indexEntry{
-			relativeOffset: binary.BigEndian.Uint32(buf[off:]),
-			position:       binary.BigEndian.Uint64(buf[off+4:]),
-		}
-	}
+	idx.entries = nil
+	idx.dirtyFrom = 0
+	idx.needsSync = true
 	return nil
 }
 
 // Append buffers a new index entry in memory (no file I/O until Sync).
-func (idx *index) Append(offset uint64, position uint64) {
-	idx.entries = append(idx.entries, indexEntry{
+func (idx *index) Append(offset uint64, position uint64) error {
+	if offset < idx.baseOffset ||
+		offset-idx.baseOffset > math.MaxUint32 ||
+		len(idx.entries) >= maxIndexEntries {
+		return ErrInvalidSegmentLayout
+	}
+	entry := indexEntry{
 		relativeOffset: uint32(offset - idx.baseOffset),
 		position:       position,
-	})
+	}
+	if len(idx.entries) > 0 {
+		previous := idx.entries[len(idx.entries)-1]
+		if entry.relativeOffset <= previous.relativeOffset ||
+			entry.position <= previous.position {
+			return ErrInvalidSegmentLayout
+		}
+	}
+	idx.entries = append(idx.entries, entry)
+	return nil
 }
 
 // Lookup finds the .log file position for the entry nearest to (and <=) targetOffset.
@@ -103,40 +118,50 @@ func (idx *index) Lookup(targetOffset uint64) (position uint64, foundOffset uint
 	return e.position, idx.baseOffset + uint64(e.relativeOffset), nil
 }
 
-// LastEntry returns the last index entry, or false if empty.
-func (idx *index) LastEntry() (offset uint64, position uint64, ok bool) {
-	if len(idx.entries) == 0 {
-		return 0, 0, false
-	}
-	e := idx.entries[len(idx.entries)-1]
-	return idx.baseOffset + uint64(e.relativeOffset), e.position, true
-}
-
 // Sync flushes buffered index entries to file and fsyncs.
 func (idx *index) Sync() error {
 	dirty := idx.entries[idx.dirtyFrom:]
-	if len(dirty) == 0 {
+	if len(dirty) == 0 && !idx.needsSync {
 		return nil
 	}
+	writeOffset := int64(idx.dirtyFrom) * indexEntrySize
+	if len(dirty) > 0 {
+		if _, err := idx.file.Seek(writeOffset, io.SeekStart); err != nil {
+			return err
+		}
 
-	buf := make([]byte, len(dirty)*indexEntrySize)
-	for i, e := range dirty {
-		off := i * indexEntrySize
-		binary.BigEndian.PutUint32(buf[off:], e.relativeOffset)
-		binary.BigEndian.PutUint64(buf[off+4:], e.position)
+		buf := make([]byte, len(dirty)*indexEntrySize)
+		for i, e := range dirty {
+			off := i * indexEntrySize
+			binary.BigEndian.PutUint32(buf[off:], e.relativeOffset)
+			binary.BigEndian.PutUint64(buf[off+4:], e.position)
+		}
+
+		n, err := idx.fileOps.write(idx.file, buf)
+		if err == nil && n != len(buf) {
+			err = io.ErrShortWrite
+		}
+		if err != nil {
+			// Truncate back to the last known-good position to avoid partial entries on disk.
+			return errors.Join(err, idx.rollback(writeOffset))
+		}
 	}
-
-	n, err := idx.file.Write(buf)
-	if err != nil {
-		// Truncate back to the last known-good position to avoid partial entries on disk.
-		goodSize := int64(idx.dirtyFrom) * indexEntrySize
-		idx.file.Truncate(goodSize)
-		idx.file.Seek(goodSize, 0)
+	if err := idx.fileOps.sync(idx.file); err != nil {
+		if len(dirty) > 0 {
+			return errors.Join(err, idx.rollback(writeOffset))
+		}
 		return err
 	}
-	_ = n
 	idx.dirtyFrom = len(idx.entries)
-	return idx.file.Sync()
+	idx.needsSync = false
+	return nil
+}
+
+func (idx *index) rollback(size int64) error {
+	truncateErr := idx.file.Truncate(size)
+	_, seekErr := idx.file.Seek(size, 0)
+	idx.needsSync = true
+	return errors.Join(truncateErr, seekErr)
 }
 
 // Close flushes and closes the index file.

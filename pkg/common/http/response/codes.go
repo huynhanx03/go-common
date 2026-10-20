@@ -13,6 +13,7 @@ var httpCodeOverrides = map[int]int{
 	apperr.CodeValidationFailed: http.StatusUnprocessableEntity,   // 422 within the 400 range
 	apperr.CodeBodyTooLarge:     http.StatusRequestEntityTooLarge, // 413 within the 400 range
 	apperr.CodeAccountNotFound:  http.StatusNotFound,              // resource lookup miss, not an auth failure
+	apperr.CodeGatewayTimeout:   http.StatusGatewayTimeout,
 }
 
 // httpCodeRanges maps business-code ranges [min, max) to HTTP statuses.

@@ -95,7 +95,7 @@ func (hk *HeavyKeepers) Add(item string) {
 
 	for i := uint32(0); i < hk.depth; i++ {
 		// Use a different seed for each row
-		idx := hash.Hash64WithSeed(item, uint64(i)) % uint64(hk.width)
+		idx := hash.Sum64WithSeed(item, uint64(i)) % uint64(hk.width)
 		cell := &hk.rows[i][idx]
 
 		if cell.count == 0 {

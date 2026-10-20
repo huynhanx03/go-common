@@ -2,14 +2,11 @@ package oauth
 
 import (
 	"context"
-	"fmt"
-	"net/http"
+	"encoding/json"
 	"strconv"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/github"
-
-	"github.com/huynhanx03/go-common/pkg/encoding/json"
 )
 
 const (
@@ -17,112 +14,205 @@ const (
 	githubEmailsURL = "https://api.github.com/user/emails"
 )
 
+var githubDefaults = providerDefaults{
+	endpoints: Endpoints{
+		AuthorizationURL: github.Endpoint.AuthURL,
+		TokenURL:         github.Endpoint.TokenURL,
+		ProfileURL:       githubUserURL,
+		EmailsURL:        githubEmailsURL,
+	},
+	scopes: []string{"read:user", "user:email"},
+	allowedScopes: map[string]struct{}{
+		"read:user":  {},
+		"user:email": {},
+	},
+	requiredScopes: []string{"read:user"},
+	authStyle:      oauth2.AuthStyleInParams,
+	requireEmails:  true,
+}
+
+type githubUserResponse struct {
+	Login                   string          `json:"login"`
+	ID                      int64           `json:"id"`
+	NodeID                  string          `json:"node_id"`
+	AvatarURL               string          `json:"avatar_url"`
+	GravatarID              string          `json:"gravatar_id"`
+	URL                     string          `json:"url"`
+	HTMLURL                 string          `json:"html_url"`
+	FollowersURL            string          `json:"followers_url"`
+	FollowingURL            string          `json:"following_url"`
+	GistsURL                string          `json:"gists_url"`
+	StarredURL              string          `json:"starred_url"`
+	SubscriptionsURL        string          `json:"subscriptions_url"`
+	OrganizationsURL        string          `json:"organizations_url"`
+	ReposURL                string          `json:"repos_url"`
+	EventsURL               string          `json:"events_url"`
+	ReceivedEventsURL       string          `json:"received_events_url"`
+	Type                    string          `json:"type"`
+	UserViewType            string          `json:"user_view_type"`
+	SiteAdmin               bool            `json:"site_admin"`
+	Name                    string          `json:"name"`
+	Company                 string          `json:"company"`
+	Blog                    string          `json:"blog"`
+	Location                string          `json:"location"`
+	Email                   string          `json:"email"`
+	Hireable                *bool           `json:"hireable"`
+	Bio                     string          `json:"bio"`
+	TwitterUsername         string          `json:"twitter_username"`
+	NotificationEmail       string          `json:"notification_email"`
+	PublicRepos             int64           `json:"public_repos"`
+	PublicGists             int64           `json:"public_gists"`
+	Followers               int64           `json:"followers"`
+	Following               int64           `json:"following"`
+	CreatedAt               string          `json:"created_at"`
+	UpdatedAt               string          `json:"updated_at"`
+	PrivateGists            int64           `json:"private_gists"`
+	TotalPrivateRepos       int64           `json:"total_private_repos"`
+	OwnedPrivateRepos       int64           `json:"owned_private_repos"`
+	DiskUsage               int64           `json:"disk_usage"`
+	Collaborators           int64           `json:"collaborators"`
+	TwoFactorAuthentication bool            `json:"two_factor_authentication"`
+	Plan                    json.RawMessage `json:"plan"`
+}
+
+type githubEmailResponse struct {
+	Email      string `json:"email"`
+	Primary    bool   `json:"primary"`
+	Verified   bool   `json:"verified"`
+	Visibility string `json:"visibility"`
+}
+
+// GitHubProvider implements the bounded GitHub OAuth adapter.
 type GitHubProvider struct {
-	config *oauth2.Config
+	core       *providerCore
+	profileURL string
+	emailsURL  string
 }
 
-type githubUserResp struct {
-	ID        int64  `json:"id"`
-	Login     string `json:"login"`
-	Name      string `json:"name"`
-	Email     string `json:"email"`
-	AvatarURL string `json:"avatar_url"`
-}
-
-type githubEmailResp struct {
-	Email    string `json:"email"`
-	Primary  bool   `json:"primary"`
-	Verified bool   `json:"verified"`
-}
-
-func NewGitHubProvider(clientID, clientSecret, redirectURL string) *GitHubProvider {
-	return &GitHubProvider{
-		config: &oauth2.Config{
-			ClientID:     clientID,
-			ClientSecret: clientSecret,
-			RedirectURL:  redirectURL,
-			Scopes:       []string{"read:user", "user:email"},
-			Endpoint:     github.Endpoint,
-		},
+// NewGitHubProvider validates and snapshots a GitHub provider configuration.
+func NewGitHubProvider(options Options) (*GitHubProvider, error) {
+	normalized, err := normalizeOptions("github", options, githubDefaults)
+	if err != nil {
+		return nil, err
 	}
-}
-
-func (g *GitHubProvider) AuthCodeURL(state string) string {
-	return g.config.AuthCodeURL(state)
+	return &GitHubProvider{
+		core:       newProviderCore("github", normalized),
+		profileURL: normalized.endpoints.ProfileURL,
+		emailsURL:  normalized.endpoints.EmailsURL,
+	}, nil
 }
 
 func (g *GitHubProvider) Name() string {
 	return "github"
 }
 
-func (g *GitHubProvider) ExchangeCode(ctx context.Context, code string) (*OAuthUserInfo, error) {
-	ctx, cancel := context.WithTimeout(ctx, httpTimeout)
+func (g *GitHubProvider) AuthorizationURL(
+	ctx context.Context,
+	request AuthorizationRequest,
+) (string, error) {
+	return g.core.authorizationURL(ctx, request)
+}
+
+func (g *GitHubProvider) Exchange(
+	ctx context.Context,
+	request ExchangeRequest,
+) (Profile, error) {
+	return g.exchange(ctx, request, true)
+}
+
+func (g *GitHubProvider) exchange(
+	ctx context.Context,
+	request ExchangeRequest,
+	requirePKCE bool,
+) (Profile, error) {
+	exchangeContext, cancel, err := g.core.startExchange(ctx, request, requirePKCE)
+	if err != nil {
+		return Profile{}, err
+	}
 	defer cancel()
 
-	token, err := g.config.Exchange(ctx, code)
+	accessToken, err := g.core.exchangeToken(exchangeContext, request, requirePKCE)
 	if err != nil {
-		return nil, fmt.Errorf("exchange github code: %w", err)
+		return Profile{}, err
+	}
+	var user githubUserResponse
+	if err := g.core.getJSON(
+		exchangeContext,
+		g.profileURL,
+		accessToken,
+		&user,
+		"profile",
+	); err != nil {
+		return Profile{}, err
+	}
+	if user.ID <= 0 {
+		return Profile{}, newProviderError(ErrMissingSubject, g.Name(), "profile")
 	}
 
-	client := g.config.Client(ctx, token)
-	raw, err := getJSON[githubUserResp](client, githubUserURL)
+	var emails []githubEmailResponse
+	if err := g.core.getJSON(
+		exchangeContext,
+		g.emailsURL,
+		accessToken,
+		&emails,
+		"emails",
+	); err != nil {
+		return Profile{}, err
+	}
+	email, verified := selectGitHubEmail(user.Email, emails)
+	return normalizeProfile(g.Name(), Profile{
+		Subject:       strconv.FormatInt(user.ID, 10),
+		Email:         email,
+		EmailVerified: verified,
+		DisplayName:   user.Name,
+		Login:         user.Login,
+		AvatarURL:     user.AvatarURL,
+	})
+}
+
+func selectGitHubEmail(
+	publicEmail string,
+	emails []githubEmailResponse,
+) (string, bool) {
+	for _, email := range emails {
+		if email.Primary && email.Verified && email.Email != "" {
+			return email.Email, true
+		}
+	}
+	for _, email := range emails {
+		if email.Verified && email.Email != "" {
+			return email.Email, true
+		}
+	}
+	return publicEmail, false
+}
+
+// AuthCodeURL is a state-only compatibility wrapper.
+//
+// Deprecated: use AuthorizationURL with PKCE.
+func (g *GitHubProvider) AuthCodeURL(state string) string {
+	return g.core.legacyAuthorizationURL(state)
+}
+
+// ExchangeCode is a non-PKCE compatibility wrapper.
+//
+// Deprecated: use Exchange with a matching PKCE verifier.
+func (g *GitHubProvider) ExchangeCode(
+	ctx context.Context,
+	code string,
+) (*OAuthUserInfo, error) {
+	request, err := g.core.legacyExchangeRequest(code)
 	if err != nil {
 		return nil, err
 	}
-	if raw.ID == 0 {
-		return nil, fmt.Errorf("github userinfo missing id")
-	}
-
-	email := raw.Email
-	verified := email != ""
-	if email == "" {
-		email, verified = selectGitHubEmail(client)
-	}
-
-	return &OAuthUserInfo{
-		ExternalID: strconv.FormatInt(raw.ID, 10),
-		Metadata: map[string]any{
-			"email":      email,
-			"verified":   verified,
-			"name":       raw.Name,
-			"login":      raw.Login,
-			"avatar_url": raw.AvatarURL,
-		},
-	}, nil
-}
-
-func selectGitHubEmail(client *http.Client) (string, bool) {
-	emails, err := getJSON[[]githubEmailResp](client, githubEmailsURL)
+	profile, err := g.exchange(ctx, request, false)
 	if err != nil {
-		return "", false
+		return nil, err
 	}
-
-	for _, item := range emails {
-		if item.Primary && item.Verified {
-			return item.Email, true
-		}
-	}
-	for _, item := range emails {
-		if item.Verified {
-			return item.Email, true
-		}
-	}
-	return "", false
+	return legacyUserInfo(profile), nil
 }
 
-func getJSON[T any](client *http.Client, url string) (T, error) {
-	var out T
-	resp, err := client.Get(url)
-	if err != nil {
-		return out, fmt.Errorf("get %s: %w", url, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return out, fmt.Errorf("%s returned %d", url, resp.StatusCode)
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return out, fmt.Errorf("decode %s: %w", url, err)
-	}
-	return out, nil
-}
+var (
+	_ Provider       = (*GitHubProvider)(nil)
+	_ LegacyProvider = (*GitHubProvider)(nil)
+)

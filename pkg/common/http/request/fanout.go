@@ -2,78 +2,152 @@ package request
 
 import (
 	"context"
+	"errors"
 	"sync"
+	"sync/atomic"
+
+	"golang.org/x/sync/errgroup"
 )
 
-// FanoutResult holds the outcome of a single concurrent task.
-type FanoutResult[T any] struct {
-	Value T
-	Err   error
+const (
+	maxFanoutConcurrency = 256
+	maxFanoutTasks       = 10_000
+)
+
+type FanoutMode uint8
+
+const (
+	FanoutAll FanoutMode = iota + 1
+	FanoutFirstSuccess
+	FanoutFirstError
+)
+
+type FanoutOptions struct {
+	MaxConcurrency int
+	Mode           FanoutMode
 }
 
-// Fanout executes multiple functions concurrently with a shared context.
-// If any function returns an error, other functions continue to run
-// (use context cancellation for early abort).
-// Results are returned in the same order as the input functions.
-func Fanout[T any](ctx context.Context, fns ...func(ctx context.Context) (T, error)) []FanoutResult[T] {
-	results := make([]FanoutResult[T], len(fns))
-	var wg sync.WaitGroup
-	wg.Add(len(fns))
+type FanoutResult[T any] struct {
+	Value   T
+	Err     error
+	Started bool
+}
 
-	for i, fn := range fns {
-		go func(idx int, f func(ctx context.Context) (T, error)) {
-			defer wg.Done()
-			val, err := f(ctx)
-			results[idx] = FanoutResult[T]{Value: val, Err: err}
-		}(i, fn)
+// Fanout executes a copied task list through a fixed-size worker group.
+// Results always correspond to input indexes.
+func Fanout[T any](
+	ctx context.Context,
+	options FanoutOptions,
+	tasks ...func(context.Context) (T, error),
+) ([]FanoutResult[T], error) {
+	if ctx == nil ||
+		options.MaxConcurrency <= 0 ||
+		options.MaxConcurrency > maxFanoutConcurrency ||
+		(options.Mode != FanoutAll &&
+			options.Mode != FanoutFirstSuccess &&
+			options.Mode != FanoutFirstError) ||
+		len(tasks) > maxFanoutTasks {
+		return nil, ErrInvalidFanout
+	}
+	if err := ctx.Err(); err != nil {
+		return make([]FanoutResult[T], len(tasks)), err
+	}
+	if len(tasks) == 0 {
+		return []FanoutResult[T]{}, nil
 	}
 
-	wg.Wait()
-	return results
-}
-
-// FanoutFirst executes multiple functions concurrently and returns
-// the first successful result. If all fail, returns the last error.
-func FanoutFirst[T any](ctx context.Context, fns ...func(ctx context.Context) (T, error)) (T, error) {
-	ctx, cancel := context.WithCancel(ctx)
+	copiedTasks := append([]func(context.Context) (T, error)(nil), tasks...)
+	results := make([]FanoutResult[T], len(copiedTasks))
+	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	type outcome struct {
-		value T
-		err   error
-	}
+	var next atomic.Int64
+	var firstError error
+	var firstErrorOnce sync.Once
+	var successFound atomic.Bool
+	group, _ := errgroup.WithContext(runCtx)
+	workers := min(options.MaxConcurrency, len(copiedTasks))
+	for range workers {
+		group.Go(func() error {
+			for {
+				if runCtx.Err() != nil {
+					return nil
+				}
+				index := int(next.Add(1) - 1)
+				if index >= len(copiedTasks) {
+					return nil
+				}
 
-	ch := make(chan outcome, len(fns))
-	for _, fn := range fns {
-		go func(f func(ctx context.Context) (T, error)) {
-			val, err := f(ctx)
-			ch <- outcome{value: val, err: err}
-		}(fn)
+				value, err := runFanoutTask(runCtx, copiedTasks[index])
+				results[index] = FanoutResult[T]{
+					Value:   value,
+					Err:     err,
+					Started: true,
+				}
+				switch options.Mode {
+				case FanoutFirstError:
+					if err != nil {
+						firstErrorOnce.Do(func() {
+							firstError = err
+							cancel()
+						})
+					}
+				case FanoutFirstSuccess:
+					if err == nil && successFound.CompareAndSwap(false, true) {
+						cancel()
+					}
+				}
+			}
+		})
 	}
+	_ = group.Wait()
 
-	var lastErr error
-	for range fns {
-		res := <-ch
-		if res.err == nil {
-			cancel()
-			return res.value, nil
+	unstartedError := context.Canceled
+	if ctx.Err() != nil {
+		unstartedError = ctx.Err()
+	}
+	for index := range results {
+		if !results[index].Started {
+			results[index].Err = unstartedError
 		}
-		lastErr = res.err
 	}
 
-	var zero T
-	return zero, lastErr
+	if ctx.Err() != nil {
+		return results, ctx.Err()
+	}
+	switch options.Mode {
+	case FanoutFirstError:
+		return results, firstError
+	case FanoutFirstSuccess:
+		if successFound.Load() {
+			return results, nil
+		}
+		failures := make([]error, 0, len(results)+1)
+		failures = append(failures, ErrNoSuccessfulResult)
+		for _, result := range results {
+			if result.Err != nil {
+				failures = append(failures, result.Err)
+			}
+		}
+		return results, errors.Join(failures...)
+	default:
+		return results, nil
+	}
 }
 
-// FanoutCollect executes functions concurrently and collects only successful results.
-// Errors are silently discarded — use Fanout if you need per-task error handling.
-func FanoutCollect[T any](ctx context.Context, fns ...func(ctx context.Context) (T, error)) []T {
-	results := Fanout(ctx, fns...)
-	collected := make([]T, 0, len(results))
-	for _, r := range results {
-		if r.Err == nil {
-			collected = append(collected, r.Value)
-		}
+func runFanoutTask[T any](
+	ctx context.Context,
+	task func(context.Context) (T, error),
+) (value T, err error) {
+	if task == nil {
+		return value, ErrInvalidTask
 	}
-	return collected
+	defer func() {
+		if recover() != nil {
+			var zero T
+			value = zero
+			err = &TaskPanicError{}
+		}
+	}()
+	return task(ctx)
 }

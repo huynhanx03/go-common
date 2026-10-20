@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -55,11 +56,48 @@ func Fetch[T any](
 	ttl time.Duration,
 	fn func() (T, error),
 ) (T, error) {
-	var zero T
+	return GetOrLoad(
+		context.Background(),
+		c,
+		sf,
+		key,
+		ttl,
+		func(context.Context) (T, error) {
+			return fn()
+		},
+	)
+}
 
-	load := func() (T, error) {
+// GetOrLoad is the context-aware local cache-aside contract. Concurrent misses
+// share one loader invocation while each waiter may cancel independently.
+func GetOrLoad[T any](
+	ctx context.Context,
+	c LocalCache[string, any],
+	sf *singleflight.Group,
+	key string,
+	ttl time.Duration,
+	fn func(context.Context) (T, error),
+) (T, error) {
+	var zero T
+	if ctx == nil ||
+		c == nil ||
+		sf == nil ||
+		key == "" ||
+		len(key) > 1024 ||
+		ttl <= 0 ||
+		fn == nil {
+		return zero, ErrInvalidConfig
+	}
+	if err := ctx.Err(); err != nil {
+		return zero, err
+	}
+
+	load := func(loadContext context.Context) (T, error) {
 		start := time.Now()
-		value, err := fn()
+		value, err := fn(loadContext)
+		if ctxErr := loadContext.Err(); ctxErr != nil {
+			return zero, ctxErr
+		}
 		switch {
 		case err == nil:
 			jttl := jitterTTL(ttl)
@@ -73,7 +111,13 @@ func Fetch[T any](
 
 	if env, ok := Get[envelope[T]](c, key); ok {
 		if env.shouldRefresh() {
-			refreshAsync(sf, key, load)
+			refreshContext, cancel := detachedContext(ctx)
+			if !refreshAsync(sf, key, func() (T, error) {
+				defer cancel()
+				return load(refreshContext)
+			}) {
+				cancel()
+			}
 		}
 		return env.Value, nil
 	}
@@ -81,13 +125,13 @@ func Fetch[T any](
 		return zero, ErrNotFound
 	}
 
-	return doTyped(sf, key, func() (T, error) {
+	return doTypedContext(ctx, sf, key, func() (T, error) {
 		if env, ok := Get[envelope[T]](c, key); ok {
 			return env.Value, nil
 		}
 		if _, neg := Get[negativeMarker](c, key+negativeSuffix); neg {
 			return zero, ErrNotFound
 		}
-		return load()
+		return load(ctx)
 	})
 }

@@ -47,6 +47,20 @@ func NewPermissionChecker(
 	}
 }
 
+// InvalidateRolePermissions removes the locally cached permission snapshot for
+// roleID. Call it after the authoritative role-to-permission transaction has
+// committed so a revocation takes effect on the next authorization request.
+//
+// Role assignment changes do not need this hook because UserRoleID is read
+// from the provider for every request. A non-positive role ID is ignored so
+// mutation paths can invoke the hook defensively after their own validation.
+func (pc *PermissionChecker) InvalidateRolePermissions(roleID int) {
+	if pc == nil || pc.cache == nil || roleID <= 0 {
+		return
+	}
+	cache.Delete(pc.cache, cacheKeyPrefixRolePermissions+strconv.Itoa(roleID))
+}
+
 // getRolePermissions fetches aggregated permissions for a role via the provider.
 // Returns map[resourceID]scopeMask. Results are cached locally.
 func (pc *PermissionChecker) getRolePermissions(ctx context.Context, roleID int) (map[int]int, error) {

@@ -1,78 +1,81 @@
 package timer
 
 import (
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
-// Timer provides the current time as unix nanoseconds (int64).
+// ErrInvalidStep reports a non-positive refresh interval.
+var ErrInvalidStep = errors.New("timer: step must be positive")
+
+// Timer provides the current time as Unix nanoseconds.
 // Implementations must be safe for concurrent use.
 type Timer interface {
 	Now() int64
-	Stop()
 }
 
-// CachedTimer caches the current time and updates it at a fixed interval,
-// avoiding expensive syscalls on every read. The time is stored as
-// unix nanoseconds (int64) for zero-allocation atomic loads.
+// CachedTimer stores a periodically refreshed timestamp. It owns one
+// goroutine and its owner must call Stop when it is no longer needed.
 type CachedTimer struct {
-	now    int64
-	step   time.Duration
-	ticker *time.Ticker
-	done   chan struct{}
-	wg     sync.WaitGroup
+	now      atomic.Int64
+	ticker   *time.Ticker
+	stop     chan struct{}
+	stopOnce sync.Once
+	wg       sync.WaitGroup
 }
 
-// NewCachedTimer creates a timer that refreshes every step interval.
-// Common steps: 500ms for workerpools, 100ms for rate limiters.
-func NewCachedTimer(step time.Duration) *CachedTimer {
-	t := &CachedTimer{
-		now:    time.Now().UnixNano(),
-		step:   step,
-		ticker: time.NewTicker(step),
-		done:   make(chan struct{}),
+// NewCachedTimer creates a timer that refreshes at the supplied interval.
+func NewCachedTimer(step time.Duration) (*CachedTimer, error) {
+	if step <= 0 {
+		return nil, ErrInvalidStep
 	}
+
+	t := &CachedTimer{
+		ticker: time.NewTicker(step),
+		stop:   make(chan struct{}),
+	}
+	t.now.Store(time.Now().UnixNano())
 
 	t.wg.Add(1)
 	go t.run()
 
-	return t
+	return t, nil
 }
 
 func (t *CachedTimer) run() {
 	defer t.wg.Done()
+	defer t.ticker.Stop()
 
 	for {
 		select {
 		case <-t.ticker.C:
-			atomic.StoreInt64(&t.now, time.Now().UnixNano())
-		case <-t.done:
-			t.ticker.Stop()
+			t.now.Store(time.Now().UnixNano())
+		case <-t.stop:
 			return
 		}
 	}
 }
 
-// Now returns the cached current time as unix nanoseconds.
+// Now returns the most recently observed Unix-nanosecond timestamp.
 func (t *CachedTimer) Now() int64 {
-	return atomic.LoadInt64(&t.now)
+	return t.now.Load()
 }
 
-// Stop halts the background ticker goroutine.
+// Stop releases the ticker goroutine. It is safe to call concurrently and
+// more than once.
 func (t *CachedTimer) Stop() {
-	close(t.done)
+	t.stopOnce.Do(func() {
+		close(t.stop)
+	})
 	t.wg.Wait()
 }
 
-// SystemTimer always calls time.Now() — no caching, exact precision.
-// Use as fallback when no CachedTimer is injected.
+// SystemTimer reads the system clock directly and owns no resources.
 type SystemTimer struct{}
 
-// Now returns the current time as unix nanoseconds via syscall.
+// Now returns the current Unix-nanosecond timestamp.
 func (SystemTimer) Now() int64 {
 	return time.Now().UnixNano()
 }
-
-// Stop is a no-op for SystemTimer.
-func (SystemTimer) Stop() {}

@@ -1,5 +1,17 @@
 package dto
 
+import (
+	"errors"
+	"math"
+)
+
+const (
+	DefaultPageSize = 10
+	MaxPageSize     = 100
+)
+
+var ErrInvalidPagination = errors.New("dto: invalid pagination")
+
 // SearchFilter represents search and filter parameters
 type SearchFilter struct {
 	Key   string `json:"key" form:"key"`     // Field name to search/filter
@@ -35,6 +47,7 @@ type PaginationMeta struct {
 	TotalItems  int64 `json:"total_items"`
 	HasNext     bool  `json:"has_next"`
 	HasPrev     bool  `json:"has_prev"`
+	NextCursor  any   `json:"next_cursor,omitempty"`
 }
 
 // Paginated contains paginated data with pagination info
@@ -45,26 +58,63 @@ type Paginated[T any] struct {
 
 // SetDefaults sets default values for pagination
 func (p *PaginationOptions) SetDefaults() {
+	if p == nil {
+		return
+	}
 	if p.Page <= 0 {
 		p.Page = 1
 	}
 	if p.PageSize <= 0 {
-		p.PageSize = 10
+		p.PageSize = DefaultPageSize
 	}
-	// if p.PageSize > 100 {
-	// 	p.PageSize = 100
-	// }
+	if p.PageSize > MaxPageSize {
+		p.PageSize = MaxPageSize
+	}
 }
 
-// CalculatePagination calculates pagination information
-func CalculatePagination(currentPage, pageSize int, totalItems int64) *PaginationMeta {
-	totalPages := int((totalItems + int64(pageSize) - 1) / int64(pageSize))
-	currentPage = min(currentPage, totalPages)
-
-	if totalPages == 0 {
-		totalPages = 1
+// Validate checks positive bounded values and offset arithmetic.
+func (p PaginationOptions) Validate() error {
+	if p.Page <= 0 ||
+		p.PageSize <= 0 ||
+		p.PageSize > MaxPageSize ||
+		p.Page-1 > math.MaxInt/p.PageSize {
+		return ErrInvalidPagination
 	}
+	return nil
+}
 
+// Offset returns the checked zero-based row offset.
+func (p PaginationOptions) Offset() (int, error) {
+	if err := p.Validate(); err != nil {
+		return 0, err
+	}
+	return (p.Page - 1) * p.PageSize, nil
+}
+
+// CalculatePaginationChecked calculates validated pagination metadata.
+func CalculatePaginationChecked(
+	currentPage,
+	pageSize int,
+	totalItems int64,
+) (*PaginationMeta, error) {
+	options := PaginationOptions{Page: currentPage, PageSize: pageSize}
+	if err := options.Validate(); err != nil || totalItems < 0 {
+		return nil, ErrInvalidPagination
+	}
+	totalPages64 := totalItems / int64(pageSize)
+	if totalItems%int64(pageSize) != 0 {
+		totalPages64++
+	}
+	if totalPages64 == 0 {
+		totalPages64 = 1
+	}
+	if totalPages64 > int64(math.MaxInt) {
+		return nil, ErrInvalidPagination
+	}
+	totalPages := int(totalPages64)
+	if currentPage > totalPages {
+		currentPage = totalPages
+	}
 	return &PaginationMeta{
 		CurrentPage: currentPage,
 		PageSize:    pageSize,
@@ -72,5 +122,19 @@ func CalculatePagination(currentPage, pageSize int, totalItems int64) *Paginatio
 		TotalItems:  totalItems,
 		HasNext:     currentPage < totalPages,
 		HasPrev:     currentPage > 1,
+	}, nil
+}
+
+// CalculatePagination calculates pagination information.
+// Deprecated: use CalculatePaginationChecked for untrusted values.
+func CalculatePagination(currentPage, pageSize int, totalItems int64) *PaginationMeta {
+	meta, err := CalculatePaginationChecked(currentPage, pageSize, totalItems)
+	if err == nil {
+		return meta
+	}
+	return &PaginationMeta{
+		CurrentPage: 1,
+		PageSize:    DefaultPageSize,
+		TotalPages:  1,
 	}
 }

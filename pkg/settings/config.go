@@ -10,21 +10,8 @@ const (
 	EnvProd    Env = "prod"
 )
 
-func (e Env) IsDev() bool { return e == EnvDev || e == "" }
+func (e Env) IsDev() bool  { return e == EnvDev }
 func (e Env) IsProd() bool { return e == EnvProd }
-
-type Config struct {
-	Server   Server   `mapstructure:"server"`
-	Logger   Logger   `mapstructure:"logger"`
-	Database Database `mapstructure:"database"`
-	JWT      JWT      `mapstructure:"jwt"`
-	Services Services `mapstructure:"services"`
-}
-
-type Services struct {
-	IdentityService GRPCService `mapstructure:"identity_service"`
-	BillingService  GRPCService `mapstructure:"billing_service"`
-}
 
 type GRPCService struct {
 	Host string `mapstructure:"host"`
@@ -66,12 +53,15 @@ type Database struct {
 
 // Server is the configuration for the server
 type Server struct {
-	Mode           Env                  `mapstructure:"mode"`
-	Host           string               `mapstructure:"host"`
-	Port           int                  `mapstructure:"port"`
-	GRPCPort       int                  `mapstructure:"grpc_port"`
-	RateLimit      RateLimitConfig      `mapstructure:"rate_limit"`
-	CircuitBreaker CircuitBreakerConfig `mapstructure:"circuit_breaker"`
+	Mode                  Env                  `mapstructure:"mode"`
+	Host                  string               `mapstructure:"host"`
+	Port                  int                  `mapstructure:"port"`
+	GRPCPort              int                  `mapstructure:"grpc_port"`
+	TrustedProxies        []string             `mapstructure:"trusted_proxies"`
+	RateLimit             RateLimitConfig      `mapstructure:"rate_limit"`
+	CircuitBreaker        CircuitBreakerConfig `mapstructure:"circuit_breaker"`
+	MaxRequestBodyBytes   int64                `mapstructure:"max_request_body_bytes"`
+	RequestTimeoutSeconds int                  `mapstructure:"request_timeout_seconds"`
 }
 
 // RateLimitConfig is the configuration for HTTP rate limiting

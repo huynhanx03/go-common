@@ -15,6 +15,9 @@ func TestRedactQuery(t *testing.T) {
 		{"api key masked", "api_key=xyz", "api_key=REDACTED"},
 		{"case insensitive", "Authorization=Bearer1", "Authorization=REDACTED"},
 		{"oauth code masked", "code=4%2F0AX4", "code=REDACTED"},
+		{"websocket ticket masked", "ticket=single-use-secret", "ticket=REDACTED"},
+		{"source code masked", "source_code=package+main", "source_code=REDACTED"},
+		{"opaque payload masked", "payload=private", "payload=REDACTED"},
 	}
 
 	for _, tc := range cases {
@@ -27,7 +30,7 @@ func TestRedactQuery(t *testing.T) {
 }
 
 func TestIsSensitiveParam(t *testing.T) {
-	for _, key := range []string{"token", "refresh_token", "PASSWORD", "client_secret", "auth", "otp", "signature"} {
+	for _, key := range []string{"token", "refresh_token", "PASSWORD", "client_secret", "auth", "ticket", "otp", "signature", "source_code", "payload", "request_body"} {
 		if !isSensitiveParam(key) {
 			t.Errorf("isSensitiveParam(%q) = false, want true", key)
 		}

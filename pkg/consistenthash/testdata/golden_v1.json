@@ -1,0 +1,17 @@
+{
+  "algorithm": 1,
+  "virtual_nodes": 4,
+  "collision_attempts": 8,
+  "checksum": "13435303017218821499",
+  "members": [
+    {"id": "worker-a", "weight": 1},
+    {"id": "worker-b", "weight": 3},
+    {"id": "worker-c", "weight": 2}
+  ],
+  "lookups": {
+    "tenant-1": "worker-c",
+    "tenant-2": "worker-b",
+    "tenant-3": "worker-b",
+    "forge/partition/42": "worker-b"
+  }
+}

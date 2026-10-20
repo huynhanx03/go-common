@@ -18,12 +18,16 @@ func TestRoundTrip(t *testing.T) {
 		[]byte("hello world"),
 	}
 	for _, b := range cases {
-		got, err := Decode(Encode(b))
+		encoded, err := Encode(b)
+		if err != nil {
+			t.Fatalf("Encode(%v): %v", b, err)
+		}
+		got, err := Decode(encoded)
 		if err != nil {
 			t.Fatalf("Decode(%v): %v", b, err)
 		}
 		if !bytes.Equal(got, b) {
-			t.Fatalf("round trip %v → %q → %v", b, Encode(b), got)
+			t.Fatalf("round trip %v → %q → %v", b, encoded, got)
 		}
 	}
 }
@@ -32,7 +36,11 @@ func TestRoundTripRandom(t *testing.T) {
 	for range 200 {
 		b := make([]byte, 16)
 		rand.Read(b)
-		got, err := Decode(Encode(b))
+		encoded, encodeErr := Encode(b)
+		got, err := Decode(encoded)
+		if encodeErr != nil {
+			err = encodeErr
+		}
 		if err != nil || !bytes.Equal(got, b) {
 			t.Fatalf("round trip failed for %v: %v", b, err)
 		}
@@ -42,7 +50,10 @@ func TestRoundTripRandom(t *testing.T) {
 func TestUUIDRoundTrip(t *testing.T) {
 	id := uuid.Must(uuid.NewV7())
 
-	s := Encode(id[:])
+	s, err := Encode(id[:])
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(s) > 22 {
 		t.Fatalf("encoded UUID is %d chars, want ≤ 22 (got %q)", len(s), s)
 	}
@@ -68,8 +79,14 @@ func TestDecodeInvalidCharacter(t *testing.T) {
 func TestEncodeSortsLikeBytes(t *testing.T) {
 	// Same-length inputs must encode to strings that sort identically —
 	// this is why the alphabet is ASCII-ordered (digits < upper < lower).
-	a := Encode([]byte{1, 0, 0, 0})
-	b := Encode([]byte{2, 0, 0, 0})
+	a, err := Encode([]byte{1, 0, 0, 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := Encode([]byte{2, 0, 0, 0})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(a) == len(b) && a >= b {
 		t.Fatalf("ordering broken: %q >= %q", a, b)
 	}

@@ -1,6 +1,8 @@
 package middlewares
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"runtime/debug"
 
@@ -16,27 +18,36 @@ import (
 func RecoveryMiddleware(c *gin.Context) {
 	defer func() {
 		if err := recover(); err != nil {
-			// Check if the panic is an error or other type
-			var appErr error
-			if e, ok := err.(error); ok {
-				appErr = e
-			} else {
-				appErr = fmt.Errorf("%v", err)
+			if recoveredError, ok := err.(error); ok &&
+				(errors.Is(recoveredError, context.Canceled) ||
+					errors.Is(recoveredError, context.DeadlineExceeded)) {
+				c.Abort()
+				return
 			}
 
-			// Log the stack trace
+			stack := debug.Stack()
+			if len(stack) > 32<<10 {
+				stack = stack[:32<<10]
+			}
 			logger.FromContext(c.Request.Context()).Error("panic recovered",
-				zap.Error(appErr),
-				zap.String("stack", string(debug.Stack())),
+				zap.String("panic_type", fmt.Sprintf("%T", err)),
+				zap.ByteString("stack", stack),
 			)
 
-			// Return standardized error response
-			response.ErrorResponse(c, apperr.CodeInternalServer, apperr.New(
-				apperr.CodeInternalServer,
-				"Internal Server Error",
-				appErr,
-			))
-			// Ensure we abort the context to stop propagation
+			// Preserve the cancelled transport outcome after recording a real
+			// panic. Writing a new response after the peer has gone cannot help
+			// the caller and can obscure the cancellation in access logs.
+			if c.Request.Context().Err() != nil {
+				c.Abort()
+				return
+			}
+			if !c.Writer.Written() {
+				response.ErrorResponse(c, apperr.CodeInternalServer, apperr.New(
+					apperr.CodeInternalServer,
+					"internal server error",
+					nil,
+				))
+			}
 			c.Abort()
 		}
 	}()

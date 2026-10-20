@@ -6,7 +6,7 @@ import (
 
 	"github.com/IBM/sarama"
 
-	"github.com/huynhanx03/go-common/pkg/cid"
+	"github.com/huynhanx03/go-common/pkg/correlation"
 	"github.com/huynhanx03/go-common/pkg/encoding/json"
 )
 
@@ -17,23 +17,23 @@ func buildContext(headers []*sarama.RecordHeader) context.Context {
 	ctx := context.Background()
 
 	for _, h := range headers {
-		if string(h.Key) == cid.Header {
-			ctx = cid.WithContext(ctx, string(h.Value))
+		if string(h.Key) == correlation.Header {
+			ctx = correlation.WithContext(ctx, string(h.Value))
 			break
 		}
 	}
 
-	return cid.EnsureContext(ctx)
+	return correlation.EnsureContext(ctx)
 }
 
 // buildHeaders carries the context's correlation ID into Kafka record headers.
 func buildHeaders(ctx context.Context) []sarama.RecordHeader {
-	id := cid.FromContext(ctx)
+	id := correlation.FromContext(ctx)
 	if id == "" {
 		return nil
 	}
 	return []sarama.RecordHeader{{
-		Key:   []byte(cid.Header),
+		Key:   []byte(correlation.Header),
 		Value: []byte(id),
 	}}
 }

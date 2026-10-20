@@ -3,6 +3,7 @@ package cache
 // Shared machinery for the Fetch* helpers in local_helper.go / remote_helper.go.
 
 import (
+	"context"
 	"math/rand/v2"
 	"time"
 
@@ -14,6 +15,10 @@ import (
 // xfetchBeta tunes probabilistic early expiration: >1 refreshes more eagerly,
 // <1 less. 1.0 is the XFetch paper's recommendation.
 const xfetchBeta = 1.0
+
+const maxConcurrentRefreshes = 128
+
+var refreshSlots = make(chan struct{}, maxConcurrentRefreshes)
 
 // NegativeTTL is how long a "entity does not exist" outcome is cached.
 // Short by design: existence can change at any moment, and its only job is
@@ -78,12 +83,59 @@ func doTyped[T any](sf *singleflight.Group, key string, fn func() (T, error)) (T
 	return v.(T), nil
 }
 
+func doTypedContext[T any](
+	ctx context.Context,
+	sf *singleflight.Group,
+	key string,
+	fn func() (T, error),
+) (T, error) {
+	result := sf.DoChan(key, func() (any, error) {
+		return fn()
+	})
+	select {
+	case <-ctx.Done():
+		var zero T
+		return zero, ctx.Err()
+	case outcome := <-result:
+		if outcome.Err != nil {
+			var zero T
+			return zero, outcome.Err
+		}
+		value, ok := outcome.Val.(T)
+		if !ok {
+			var zero T
+			return zero, ErrInvalidConfig
+		}
+		return value, nil
+	}
+}
+
+// detachedContext keeps request-scoped values and an existing deadline while
+// deliberately detaching client cancellation. Background cache refreshes must
+// not be abandoned merely because the response that found the warm value has
+// completed, but they also must not outlive the operation deadline the caller
+// established for the dependency.
+func detachedContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	detached := context.WithoutCancel(ctx)
+	if deadline, exists := ctx.Deadline(); exists {
+		return context.WithDeadline(detached, deadline)
+	}
+	return detached, func() {}
+}
+
 // refreshAsync reloads a key in the background, deduplicated per key so a
 // burst of hits triggers a single reload.
-func refreshAsync[T any](sf *singleflight.Group, key string, load func() (T, error)) {
+func refreshAsync[T any](sf *singleflight.Group, key string, load func() (T, error)) bool {
+	select {
+	case refreshSlots <- struct{}{}:
+	default:
+		return false
+	}
 	go func() {
+		defer func() { <-refreshSlots }()
 		_, _, _ = sf.Do(key+":refresh", func() (any, error) {
 			return load()
 		})
 	}()
+	return true
 }

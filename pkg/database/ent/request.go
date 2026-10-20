@@ -2,11 +2,12 @@ package ent
 
 import (
 	"regexp"
+	"strings"
+	"unicode"
 
 	"entgo.io/ent/dialect/sql"
 
 	"github.com/huynhanx03/go-common/pkg/dto"
-	"github.com/huynhanx03/go-common/pkg/utils"
 )
 
 // Filter types for dto.SearchFilter.Type. Unknown or empty types fall back
@@ -73,7 +74,7 @@ var columnPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // safeColumn normalizes a client-supplied key to snake_case and rejects
 // anything that is not a plain identifier or is outside the whitelist.
 func safeColumn(key string, allowed map[string]struct{}) (string, bool) {
-	col := utils.ToSnakeCase(key)
+	col := toSnakeCase(key)
 	if !columnPattern.MatchString(col) {
 		return "", false
 	}
@@ -83,6 +84,23 @@ func safeColumn(key string, allowed map[string]struct{}) (string, bool) {
 		}
 	}
 	return col, true
+}
+
+// toSnakeCase is deliberately local to the Ent adapter so this stable package
+// does not depend on the deprecated catch-all utils package.
+func toSnakeCase(value string) string {
+	var result strings.Builder
+	for index, character := range value {
+		if unicode.IsUpper(character) {
+			if index > 0 {
+				result.WriteByte('_')
+			}
+			result.WriteRune(unicode.ToLower(character))
+			continue
+		}
+		result.WriteRune(character)
+	}
+	return result.String()
 }
 
 // columnSet builds the whitelist lookup; nil (allow any valid identifier)
@@ -103,12 +121,28 @@ func columnSet(columns []string) map[string]struct{} {
 // filter and sort by — recommended for any externally-facing endpoint;
 // without it any well-formed identifier is accepted.
 func ApplyQueryOptions(opts *dto.QueryOptions, selector *sql.Selector, allowedColumns ...string) {
+	ApplyQueryFilters(opts, selector, allowedColumns...)
+	ApplyQueryWindow(opts, selector, allowedColumns...)
+}
+
+// ApplyQueryFilters applies only the filter portion of query options. This is
+// useful before cloning an Ent query for an unwindowed total count.
+func ApplyQueryFilters(opts *dto.QueryOptions, selector *sql.Selector, allowedColumns ...string) {
 	if opts == nil {
 		return
 	}
-	allowed := columnSet(allowedColumns)
-	applyFilters(opts.Filters, selector, allowed)
-	applySort(opts.Sort, selector, allowed)
+	applyFilters(opts.Filters, selector, columnSet(allowedColumns))
+}
+
+// ApplyQueryWindow applies stable whitelisted sorting and bounded pagination.
+// Nil options still receive the default id DESC order and page-size limit.
+func ApplyQueryWindow(opts *dto.QueryOptions, selector *sql.Selector, allowedColumns ...string) {
+	if opts == nil {
+		ApplySort(nil, selector, allowedColumns...)
+		ApplyPagination(nil, selector)
+		return
+	}
+	applySort(opts.Sort, selector, columnSet(allowedColumns))
 	ApplyPagination(opts.Pagination, selector)
 }
 
@@ -179,7 +213,7 @@ func applySort(sorts []dto.SortOption, selector *sql.Selector, allowed map[strin
 // Cursor and custom sorts don't mix — with a cursor, leave Sort empty.
 func ApplyPagination(pagination *dto.PaginationOptions, selector *sql.Selector) {
 	if pagination == nil {
-		return
+		pagination = &dto.PaginationOptions{}
 	}
 	pagination.SetDefaults()
 	selector.Limit(pagination.PageSize)

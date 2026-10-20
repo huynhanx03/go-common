@@ -1,8 +1,12 @@
 package workerpool
 
 import (
+	"errors"
+
 	"github.com/panjf2000/ants/v2"
 )
+
+const maxPoolSize = 100_000
 
 // Errors re-exported so callers can match with errors.Is against the
 // workerpool package without importing ants.
@@ -33,4 +37,8 @@ var (
 
 	// ErrInvalidMultiPoolSize will be returned when creating a multi-pool with a non-positive size.
 	ErrInvalidMultiPoolSize = ants.ErrInvalidMultiPoolSize
+
+	ErrInvalidPoolSize    = errors.New("workerpool: size must be positive and bounded")
+	ErrInvalidPoolOptions = errors.New("workerpool: invalid options")
+	ErrInvalidTask        = errors.New("workerpool: invalid task")
 )

@@ -165,6 +165,15 @@ func TestApplyPaginationOffsetWithoutCursor(t *testing.T) {
 	}
 }
 
+func TestApplyPaginationNilStillAppliesSafeDefaultBound(t *testing.T) {
+	s := newSelector()
+	ApplyPagination(nil, s)
+	query, _ := render(t, s)
+	if !strings.Contains(query, "LIMIT 10") {
+		t.Fatalf("nil pagination query = %q, want safe default LIMIT 10", query)
+	}
+}
+
 func TestApplyQueryOptionsFull(t *testing.T) {
 	s := newSelector()
 	ApplyQueryOptions(&dto.QueryOptions{
@@ -181,5 +190,53 @@ func TestApplyQueryOptionsFull(t *testing.T) {
 	}
 	if len(args) != 1 || args[0] != "active" {
 		t.Fatalf("args = %v", args)
+	}
+}
+
+func TestApplyQueryOptionsNilStillAppliesStableBoundedWindow(t *testing.T) {
+	s := newSelector()
+	ApplyQueryOptions(nil, s, "id")
+	query, _ := render(t, s)
+
+	for _, want := range []string{"ORDER BY", "id", "DESC", "LIMIT 10"} {
+		if !strings.Contains(query, want) {
+			t.Fatalf("nil query options produced %q, missing %q", query, want)
+		}
+	}
+}
+
+func TestApplyQueryFiltersWhitelistsWithoutWindowingCountQuery(t *testing.T) {
+	s := newSelector()
+	ApplyQueryFilters(&dto.QueryOptions{Filters: []dto.SearchFilter{
+		{Key: "status", Value: "active", Type: OpEQ},
+		{Key: "does_not_exist", Value: "boom", Type: OpEQ},
+	}}, s, "status")
+	query, args := render(t, s)
+
+	if !strings.Contains(query, "status") || strings.Contains(query, "does_not_exist") {
+		t.Fatalf("filter whitelist not enforced: %q", query)
+	}
+	if strings.Contains(query, "LIMIT") || strings.Contains(query, "ORDER BY") {
+		t.Fatalf("count filters unexpectedly applied a result window: %q", query)
+	}
+	if len(args) != 1 || args[0] != "active" {
+		t.Fatalf("args = %v, want only the allowed status value", args)
+	}
+}
+
+func TestApplyQueryWindowDefaultsNilOptionsAndRejectsUnknownSort(t *testing.T) {
+	s := newSelector()
+	ApplyQueryWindow(&dto.QueryOptions{
+		Sort: []dto.SortOption{{Key: "does_not_exist", Order: 1}},
+	}, s, "id", "created_at")
+	query, _ := render(t, s)
+
+	if strings.Contains(query, "does_not_exist") {
+		t.Fatalf("unknown sort reached query: %q", query)
+	}
+	for _, want := range []string{"ORDER BY", "id", "DESC", "LIMIT 10"} {
+		if !strings.Contains(query, want) {
+			t.Fatalf("window query %q missing %q", query, want)
+		}
 	}
 }

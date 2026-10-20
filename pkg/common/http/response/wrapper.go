@@ -2,11 +2,12 @@ package response
 
 import (
 	"errors"
+	"net/http"
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/huynhanx03/go-common/pkg/cid"
 	"github.com/huynhanx03/go-common/pkg/common/apperr"
+	"github.com/huynhanx03/go-common/pkg/correlation"
 	"github.com/huynhanx03/go-common/pkg/dto"
 )
 
@@ -43,6 +44,30 @@ func Respond(c *gin.Context, res any) {
 	SuccessResponse(c, apperr.CodeSuccess, res)
 }
 
+// RespondStatus renders the standard success envelope with an explicit 2xx
+// transport status. It is intended for successful asynchronous commands such
+// as HTTP 202, where the business envelope still carries CodeSuccess.
+func RespondStatus(c *gin.Context, status int, res any) {
+	if status < http.StatusOK || status >= http.StatusMultipleChoices {
+		ErrorResponse(c, apperr.CodeInternalServer, errors.New("response: invalid success status"))
+		return
+	}
+	if reply, ok := res.(*Reply); ok && reply != nil {
+		c.JSON(status, Body{
+			Code:       reply.code,
+			Message:    Msg[reply.code],
+			Data:       reply.data,
+			Pagination: reply.pagination,
+		})
+		return
+	}
+	c.JSON(status, Body{
+		Code:    apperr.CodeSuccess,
+		Message: Msg[apperr.CodeSuccess],
+		Data:    res,
+	})
+}
+
 // ErrorResponse sends an error response. When err carries an *apperr.AppError
 // anywhere in its chain, that error's code, message, and details win;
 // otherwise the fallback code with its default message is used. The body
@@ -68,6 +93,6 @@ func ErrorResponse(c *gin.Context, code int, err error) {
 		Code:    code,
 		Message: msg,
 		Data:    details,
-		CID:     cid.FromContext(c.Request.Context()),
+		CID:     correlation.FromContext(c.Request.Context()),
 	})
 }
