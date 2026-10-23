@@ -28,7 +28,7 @@ func (p *Provider) CreateAtPeriodEnd(ctx context.Context, in *payment.ScheduleAt
 
 	created, err := p.client.V1SubscriptionSchedules.Create(ctx, createParams)
 	if err != nil {
-		return nil, p.fail("stripe subscription schedule create failed", err)
+		return nil, p.fail(ctx, "stripe subscription schedule create failed", err)
 	}
 
 	phaseStart := in.PeriodStart
@@ -54,7 +54,7 @@ func (p *Provider) Release(ctx context.Context, in *payment.ScheduleRef) (*payme
 
 	released, err := p.client.V1SubscriptionSchedules.Release(ctx, in.ScheduleRef, params)
 	if err != nil {
-		return nil, p.fail("stripe subscription schedule release failed", err)
+		return nil, p.fail(ctx, "stripe subscription schedule release failed", err)
 	}
 
 	return scheduleToNeutral(released), nil
@@ -80,7 +80,7 @@ func (p *Provider) writeSchedulePhases(ctx context.Context, scheduleRef string, 
 
 	updated, err := p.client.V1SubscriptionSchedules.Update(ctx, scheduleRef, params)
 	if err != nil {
-		return nil, p.fail("stripe subscription schedule update failed", err)
+		return nil, p.fail(ctx, "stripe subscription schedule update failed", err)
 	}
 
 	return scheduleToNeutral(updated), nil

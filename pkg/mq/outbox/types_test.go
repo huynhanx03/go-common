@@ -30,7 +30,7 @@ func TestPublishErrorIsBoundedAndPreservesCause(t *testing.T) {
 func TestClaimAndPublishAckCloneBoundedStringsAtTrustBoundary(t *testing.T) {
 	t.Parallel()
 
-	backing := []byte("message-1|events|cid-1|key|value|token|reference")
+	backing := []byte("message-1|events|correlation-1|key|value|token|reference")
 	alias := func(start, end int) string {
 		return unsafe.String(unsafe.SliceData(backing[start:end]), end-start)
 	}
@@ -51,7 +51,7 @@ func TestClaimAndPublishAckCloneBoundedStringsAtTrustBoundary(t *testing.T) {
 	}
 	if owned.Lease.MessageID != "message-1" || owned.Lease.Token != "token" ||
 		owned.Message.ID != "message-1" || owned.Message.Destination != "events" ||
-		owned.Message.Metadata.CorrelationID != "cid-1" ||
+		owned.Message.Metadata.CorrelationID != "correlation-1" ||
 		owned.Message.Metadata.Attributes[0] != (Attribute{Key: "key", Value: "value"}) ||
 		ack.Reference != "reference" {
 		t.Fatalf("owned values retained caller backing storage: owned=%+v ack=%+v", owned, ack)

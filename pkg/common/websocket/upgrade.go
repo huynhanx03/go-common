@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	wsinternal "github.com/huynhanx03/go-common/pkg/common/websocket/internal"
-	"github.com/huynhanx03/go-common/pkg/correlation"
 	"github.com/huynhanx03/go-common/pkg/logger"
 	"github.com/huynhanx03/go-common/pkg/security/authentication"
 )
@@ -63,9 +63,14 @@ func (hub *Hub) Handler(
 			return
 		}
 
-		requestContext := correlation.EnsureContext(request.Context())
+		requestContext := request.Context()
+		requestID := request.Header.Get(logger.RequestIDHeader)
+		if logger.ValidateRequestID(requestID) == nil {
+			requestContext = logger.WithRequestID(requestContext, requestID)
+		}
 		request = request.WithContext(requestContext)
-		principal, err := resolvePrincipal(resolve, requestContext, request)
+		principal, err := resolvePrincipal(hub.logger, resolve, requestContext, request)
+		requestContext = request.Context()
 		if requestContext.Err() != nil {
 			return
 		}
@@ -103,6 +108,7 @@ func (hub *Hub) Handler(
 }
 
 func resolvePrincipal(
+	log *logger.Logger,
 	resolve PrincipalResolver,
 	ctx context.Context,
 	request *http.Request,
@@ -116,7 +122,7 @@ func resolvePrincipal(
 		if len(stack) > maxHandlerStackBytes {
 			stack = stack[:maxHandlerStackBytes]
 		}
-		logger.FromContext(ctx).Error(
+		log.Error(ctx,
 			"websocket principal resolver panic recovered",
 			zap.String("panic_type", fmt.Sprintf("%T", recovered)),
 			zap.ByteString("stack", stack),
@@ -243,11 +249,11 @@ func (hub *Hub) attachConnection(
 		hub.mu.Unlock()
 		return ErrShuttingDown
 	}
-	connectionID := correlation.New()
+	connectionID := uuid.NewString()
 	connectionContext := hub.runCtx
-	connectionContext = correlation.WithContext(
+	connectionContext = logger.WithRequestID(
 		connectionContext,
-		correlation.FromContext(requestContext),
+		logger.RequestID(requestContext),
 	)
 	connectionContext = logger.InheritContext(connectionContext, requestContext)
 	connectionContext = authentication.WithPrincipal(connectionContext, principal)
@@ -283,7 +289,7 @@ func (hub *Hub) attachConnection(
 	hub.pumps.Add(2)
 	hub.mu.Unlock()
 
-	logger.FromContext(connectionContext).Info("websocket connection established")
+	hub.logger.Info(connectionContext, "websocket connection established")
 	go hub.readPump(connection)
 	go hub.writePump(connection)
 	return nil

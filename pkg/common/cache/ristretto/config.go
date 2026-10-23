@@ -1,8 +1,6 @@
 package ristretto
 
-import (
-	"github.com/dgraph-io/ristretto"
-)
+import "github.com/dgraph-io/ristretto"
 
 // Option applies a configuration change to a ristretto.Config.
 type Option func(cfg *ristretto.Config)

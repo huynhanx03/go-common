@@ -149,7 +149,7 @@ func (p *Provider) CancelNow(ctx context.Context, in *payment.SubscriptionRef) (
 
 	canceled, err := p.client.V1Subscriptions.Cancel(ctx, in.SubscriptionRef, params)
 	if err != nil {
-		return nil, p.fail("stripe subscription cancel now failed", err)
+		return nil, p.fail(ctx, "stripe subscription cancel now failed", err)
 	}
 
 	return p.mappedSubscription(canceled)
@@ -158,7 +158,7 @@ func (p *Provider) CancelNow(ctx context.Context, in *payment.SubscriptionRef) (
 func (p *Provider) retrieveSubscription(ctx context.Context, ref string, params *stripesdk.SubscriptionRetrieveParams) (*payment.Subscription, *apperr.AppError) {
 	live, err := p.client.V1Subscriptions.Retrieve(ctx, ref, params)
 	if err != nil {
-		return nil, p.fail("stripe subscription retrieve failed", err)
+		return nil, p.fail(ctx, "stripe subscription retrieve failed", err)
 	}
 
 	return p.mappedSubscription(live)
@@ -167,7 +167,7 @@ func (p *Provider) retrieveSubscription(ctx context.Context, ref string, params 
 func (p *Provider) updateSubscription(ctx context.Context, ref string, params *stripesdk.SubscriptionUpdateParams, logMsg string) (*payment.Subscription, *apperr.AppError) {
 	updated, err := p.client.V1Subscriptions.Update(ctx, ref, params)
 	if err != nil {
-		return nil, p.fail(logMsg, err)
+		return nil, p.fail(ctx, logMsg, err)
 	}
 
 	return p.mappedSubscription(updated)

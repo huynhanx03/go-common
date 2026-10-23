@@ -13,7 +13,7 @@ func benchmarkHubAndConnection(b *testing.B) (*Hub, *Conn) {
 	options.WriteQueueByteCapacity = maxWriteQueueBytes
 	options.MaxHubQueuedBytes = maxWriteQueueBytes
 	options.MaxOutboundMessageBytes = DefaultMessageBytes
-	hub, err := NewHub(options)
+	hub, err := NewHub(testLogger(), options)
 	if err != nil {
 		b.Fatalf("NewHub: %v", err)
 	}

@@ -6,7 +6,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/huynhanx03/go-common/pkg/correlation"
+	"github.com/huynhanx03/go-common/pkg/logger"
 )
 
 const (
@@ -60,7 +60,7 @@ func validateClaimedMessage(lease Lease, message Message, maximumDataBytes int) 
 		len(message.Metadata.Attributes) > maximumAttributes {
 		return ErrInvalidMessage
 	}
-	if message.Metadata.CorrelationID != "" && correlation.Validate(message.Metadata.CorrelationID) != nil {
+	if message.Metadata.CorrelationID != "" && logger.ValidateRequestID(message.Metadata.CorrelationID) != nil {
 		return ErrInvalidMessage
 	}
 	for _, attribute := range message.Metadata.Attributes {

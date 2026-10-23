@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/huynhanx03/go-common/pkg/correlation"
 	"github.com/huynhanx03/go-common/pkg/logger"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
@@ -16,7 +15,7 @@ func TestRelayLogsLifecycleAtInfoAndPerMessageSuccessAtDebug(t *testing.T) {
 	t.Parallel()
 
 	core, observed := observer.New(zap.DebugLevel)
-	ctx, cancel := context.WithCancel(logger.WithContext(context.Background(), zap.New(core)))
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var claimed atomic.Bool
 	message := validMessage("message-1")
@@ -39,7 +38,7 @@ func TestRelayLogsLifecycleAtInfoAndPerMessageSuccessAtDebug(t *testing.T) {
 			return nil
 		},
 	}
-	relay, err := New(store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
+	relay, err := New(logger.Wrap(zap.New(core)), store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
 		return PublishAck{}, nil
 	}), nil, validOptions())
 	if err != nil {
@@ -70,13 +69,13 @@ func TestRelayBackoffWarningRetainsMessageCorrelationAndDeliveryFields(t *testin
 	t.Parallel()
 
 	core, observed := observer.New(zap.DebugLevel)
-	ctx := logger.WithContext(context.Background(), zap.New(core))
-	ctx = correlation.WithContext(ctx, "process-cid")
+	ctx := context.Background()
+	ctx = logger.WithRequestID(ctx, "process-request")
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var claimed atomic.Bool
 	message := validMessage("message-1")
-	message.Metadata.CorrelationID = "event-cid"
+	message.Metadata.CorrelationID = "event-correlation"
 	store := storeFuncs{
 		claim: func(context.Context, ClaimRequest) ([]ClaimedMessage, error) {
 			if claimed.Swap(true) {
@@ -94,7 +93,7 @@ func TestRelayBackoffWarningRetainsMessageCorrelationAndDeliveryFields(t *testin
 	}
 	options := validOptions()
 	options.Backoff = BackoffFunc(func(uint32) time.Duration { return -1 })
-	relay, err := New(store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
+	relay, err := New(logger.Wrap(zap.New(core)), store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
 		return PublishAck{}, &PublishError{
 			Code: "provider_unavailable", Retryable: true, Ambiguous: true,
 		}
@@ -112,7 +111,7 @@ func TestRelayBackoffWarningRetainsMessageCorrelationAndDeliveryFields(t *testin
 	}
 	fields := entries[0].ContextMap()
 	for key, want := range map[string]any{
-		"correlation_id": "event-cid", "message_id": "message-1",
+		"request_id": "process-request", "correlation_id": "event-correlation", "message_id": "message-1",
 		"destination": "events", "attempt": "1",
 	} {
 		if got := fields[key]; got != want {

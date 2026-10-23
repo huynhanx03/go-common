@@ -8,7 +8,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/huynhanx03/go-common/pkg/correlation"
+	"github.com/huynhanx03/go-common/pkg/logger"
 	forgecore "github.com/huynhanx03/go-common/pkg/mq/forge"
 	"github.com/huynhanx03/go-common/pkg/mq/outbox"
 )
@@ -119,17 +119,15 @@ func infrastructureHeaders(message outbox.Message) ([]forgecore.Header, error) {
 		len(message.Metadata.Attributes) > maximumAttributes {
 		return nil, permanent(CodeInvalidMessage, nil)
 	}
-	cid := message.Metadata.CorrelationID
-	if cid == "" {
-		cid = correlation.New()
-	} else if correlation.Validate(cid) != nil {
+	correlationID := message.Metadata.CorrelationID
+	if correlationID != "" && logger.ValidateRequestID(correlationID) != nil {
 		return nil, permanent(CodeInvalidMessage, nil)
 	}
 	headers := make([]forgecore.Header, 0, len(message.Metadata.Attributes)+2)
-	headers = append(headers,
-		forgecore.Header{Key: []byte(HeaderMessageID), Value: []byte(message.ID)},
-		forgecore.Header{Key: []byte(HeaderCorrelationID), Value: []byte(cid)},
-	)
+	headers = append(headers, forgecore.Header{Key: []byte(HeaderMessageID), Value: []byte(message.ID)})
+	if correlationID != "" {
+		headers = append(headers, forgecore.Header{Key: []byte(HeaderCorrelationID), Value: []byte(correlationID)})
+	}
 	seen := make(map[string]struct{}, len(message.Metadata.Attributes))
 	for _, attribute := range message.Metadata.Attributes {
 		if !validAttributeKey(attribute.Key) || !validText(attribute.Value, maximumValueBytes, true) {

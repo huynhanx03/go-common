@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/huynhanx03/go-common/pkg/algorithm"
+	"github.com/huynhanx03/go-common/pkg/utils"
 )
 
 const (
@@ -182,8 +183,7 @@ func retryDelay(policy normalizedRetryPolicy, retryNumber int) time.Duration {
 		random = 0.5
 	}
 	random = min(1, max(0, random))
-	factor := 1 - policy.JitterFraction + (2 * policy.JitterFraction * random)
-	jittered := time.Duration(float64(delay) * factor)
+	jittered := utils.JitterDuration(delay, policy.JitterFraction, random)
 	if jittered < 0 {
 		return 0
 	}

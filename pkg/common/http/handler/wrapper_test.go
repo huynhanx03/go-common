@@ -12,11 +12,11 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/huynhanx03/go-common/pkg/cid"
 	"github.com/huynhanx03/go-common/pkg/common/apperr"
 	"github.com/huynhanx03/go-common/pkg/common/http/middlewares"
 	"github.com/huynhanx03/go-common/pkg/common/http/response"
 	"github.com/huynhanx03/go-common/pkg/dto"
+	"github.com/huynhanx03/go-common/pkg/logger"
 )
 
 type createUserReq struct {
@@ -230,10 +230,10 @@ func TestBodyLimitReturns413(t *testing.T) {
 	}
 }
 
-func TestErrorResponseCarriesCID(t *testing.T) {
+func TestErrorResponseCarriesRequestID(t *testing.T) {
 	r := newRouter()
-	r.Use(func(c *gin.Context) { // stand-in for RequestLogger's cid injection
-		c.Request = c.Request.WithContext(cid.WithContext(c.Request.Context(), "cid-42"))
+	r.Use(func(c *gin.Context) { // stand-in for RequestLogger's request ID propagation
+		c.Request = c.Request.WithContext(logger.WithRequestID(c.Request.Context(), "request-42"))
 		c.Next()
 	})
 	r.GET("/boom", WrapNoReq(func(ctx context.Context) (*userRes, error) {
@@ -242,18 +242,18 @@ func TestErrorResponseCarriesCID(t *testing.T) {
 
 	_, body := do(r, http.MethodGet, "/boom", "")
 
-	if body["cid"] != "cid-42" {
-		t.Errorf("cid = %v, want cid-42", body["cid"])
+	if body["request_id"] != "request-42" {
+		t.Errorf("request_id = %v, want request-42", body["request_id"])
 	}
 }
 
-func TestSuccessResponseHasNoCID(t *testing.T) {
+func TestSuccessResponseHasNoRequestID(t *testing.T) {
 	r := newRouter()
 	r.GET("/ok", WrapNoReq(func(ctx context.Context) (string, error) { return "fine", nil }))
 
 	_, body := do(r, http.MethodGet, "/ok", "")
 
-	if _, ok := body["cid"]; ok {
-		t.Error("success responses must not carry cid")
+	if _, ok := body["request_id"]; ok {
+		t.Error("success responses must not carry request_id")
 	}
 }

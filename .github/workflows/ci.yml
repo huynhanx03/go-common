@@ -23,34 +23,9 @@ env:
   GOFLAGS: -mod=readonly
 
 jobs:
-  quality:
-    name: Format, vet, contracts
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
-        with:
-          go-version-file: go.mod
-          cache: true
-      - run: go mod download
-      - name: Verify module graph
-        run: |
-          go mod verify
-          go mod tidy -diff
-      - name: Validate workflows
-        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
-      - name: Verify formatting
-        run: make format-check
-      - name: Vet
-        run: go vet ./...
-      - name: Verify documentation and examples
-        run: ./scripts/verify-docs.sh
-
   unit:
     name: Unit tests and coverage
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -74,22 +49,10 @@ jobs:
           retention-days: 30
 
   race:
-    name: Race / ${{ matrix.package }}
+    name: Race tests
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        package:
-          - ./pkg/common/lifecycle
-          - ./pkg/common/health
-          - ./pkg/common/websocket
-          - ./pkg/common/cache/...
-          - ./pkg/common/workerpool
-          - ./pkg/logger
-          - ./pkg/mq/batcher
-          - ./pkg/mq/forge
-          - ./pkg/mq/outbox/...
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -99,10 +62,11 @@ jobs:
           go-version-file: go.mod
           cache: true
       - run: go mod download
-      - run: go test -race "${{ matrix.package }}" -count=1
+      - run: make test-race
 
   fuzz-seeds:
     name: Fuzz seed corpus
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -116,50 +80,9 @@ jobs:
       - run: go mod download
       - run: make fuzz-seeds
 
-  vulnerability:
-    name: Reachable vulnerabilities
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
-        with:
-          go-version-file: go.mod
-          cache: true
-      - run: go mod download
-      - name: Run govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
-
-  benchmarks:
-    name: Benchmark baseline
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
-        with:
-          go-version-file: go.mod
-          cache: true
-      - run: go mod download
-      - name: Capture benchmark matrix
-        env:
-          BENCH_COUNT: 5
-        run: ./scripts/run-benchmarks.sh | tee benchmark.txt
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: go-common-benchmark-${{ github.sha }}
-          path: benchmark.txt
-          if-no-files-found: error
-          retention-days: 90
-
   integration:
     name: Container integration tests
-    if: github.event_name == 'workflow_dispatch' && inputs.run_integration
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.run_integration)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -173,29 +96,158 @@ jobs:
       - run: go mod download
       - run: ./scripts/test-integration.sh
 
-  gate:
-    name: Required gate
-    if: always()
-    needs: [quality, unit, race, fuzz-seeds, vulnerability]
+  test-overview:
+    name: Test Overview
+    if: always() && github.event_name != 'push'
+    needs: [unit, race, fuzz-seeds, integration]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Require every mandatory job to pass
+      - name: Write test report
         env:
-          QUALITY_RESULT: ${{ needs.quality.result }}
           UNIT_RESULT: ${{ needs.unit.result }}
           RACE_RESULT: ${{ needs.race.result }}
           FUZZ_RESULT: ${{ needs.fuzz-seeds.result }}
-          VULNERABILITY_RESULT: ${{ needs.vulnerability.result }}
+          INTEGRATION_RESULT: ${{ needs.integration.result }}
+        run: |
+          {
+            echo '## Test Overview'
+            echo
+            echo '| Test suite | Result |'
+            echo '| --- | --- |'
+            echo "| Unit tests and coverage | $UNIT_RESULT |"
+            echo "| Race tests (all packages) | $RACE_RESULT |"
+            echo "| Fuzz seed corpus | $FUZZ_RESULT |"
+            echo "| Container integration tests | $INTEGRATION_RESULT |"
+            echo
+            echo 'Coverage profile: download the `go-common-coverage-${{ github.sha }}` artifact.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  quality:
+    name: Quality checks
+    if: always() && github.event_name != 'push'
+    needs: [test-overview]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod download
+      - name: Verify module graph
+        run: |
+          go mod verify
+          go mod tidy -diff
+      - name: Validate workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+      - name: Verify formatting
+        run: make format-check
+      - name: Vet
+        run: go vet ./...
+
+  security:
+    name: Security scans
+    if: always() && github.event_name != 'push'
+    needs: [quality]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod download
+      - name: Scan Go dependencies for known vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+      - name: Scan repository for secrets
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: false
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: false
+          GITLEAKS_ENABLE_SUMMARY: true
+
+  benchmarks:
+    name: Benchmark baseline
+    if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: [security]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod download
+      - name: Capture benchmark matrix
+        run: make benchmarks | tee benchmark.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: go-common-benchmark-${{ github.sha }}
+          path: benchmark.txt
+          if-no-files-found: error
+          retention-days: 90
+
+  gate:
+    name: Required gate
+    if: always() && github.event_name != 'push'
+    needs: [unit, race, fuzz-seeds, integration, test-overview, quality, security, benchmarks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require tests, quality, and security to pass
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_INTEGRATION: ${{ inputs.run_integration }}
+          UNIT_RESULT: ${{ needs.unit.result }}
+          RACE_RESULT: ${{ needs.race.result }}
+          FUZZ_RESULT: ${{ needs.fuzz-seeds.result }}
+          INTEGRATION_RESULT: ${{ needs.integration.result }}
+          TEST_OVERVIEW_RESULT: ${{ needs.test-overview.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          SECURITY_RESULT: ${{ needs.security.result }}
+          BENCHMARK_RESULT: ${{ needs.benchmarks.result }}
         run: |
           for result in \
-            "$QUALITY_RESULT" \
             "$UNIT_RESULT" \
             "$RACE_RESULT" \
             "$FUZZ_RESULT" \
-            "$VULNERABILITY_RESULT"; do
+            "$TEST_OVERVIEW_RESULT" \
+            "$QUALITY_RESULT" \
+            "$SECURITY_RESULT"; do
             if [[ "$result" != success ]]; then
               echo "::error::A required go-common job did not pass (result=$result)."
               exit 1
             fi
           done
+
+          if [[ "$EVENT_NAME" != workflow_dispatch || "$RUN_INTEGRATION" == true ]]; then
+            [[ "$INTEGRATION_RESULT" == success ]] || {
+              echo "::error::Container integration tests did not pass (result=$INTEGRATION_RESULT)."
+              exit 1
+            }
+          elif [[ "$INTEGRATION_RESULT" != skipped ]]; then
+            echo "::error::Unexpected container integration result: $INTEGRATION_RESULT."
+            exit 1
+          fi
+
+          if [[ "$EVENT_NAME" == push || "$EVENT_NAME" == workflow_dispatch ]]; then
+            [[ "$BENCHMARK_RESULT" == success ]] || {
+              echo "::error::Benchmark baseline did not complete (result=$BENCHMARK_RESULT)."
+              exit 1
+            }
+          elif [[ "$BENCHMARK_RESULT" != skipped ]]; then
+            echo "::error::Unexpected benchmark result: $BENCHMARK_RESULT."
+            exit 1
+          fi

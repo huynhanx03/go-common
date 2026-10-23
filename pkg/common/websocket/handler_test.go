@@ -12,7 +12,6 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 
-	"github.com/huynhanx03/go-common/pkg/correlation"
 	"github.com/huynhanx03/go-common/pkg/logger"
 )
 
@@ -32,22 +31,23 @@ func handlerEnvelope(key string, value int) Envelope {
 	}
 }
 
-func TestHandlerContextCarriesTransportCorrelationFields(t *testing.T) {
+func TestHandlerContextCarriesRequestAndHandlerFields(t *testing.T) {
 	t.Parallel()
 
 	core, logs := observer.New(zap.DebugLevel)
+	log := logger.Wrap(zap.New(core))
 	hub, connection := handlerUnitHub(t, func(hub *Hub) error {
 		return On(hub, "handler.test.v1", func(
 			ctx context.Context,
 			_ *Conn,
 			_ *handlerPayload,
 		) error {
-			logger.FromContext(ctx).Info("application handler")
+			log.Info(ctx, "application handler")
 			return nil
 		})
 	})
-	connection.ctx = logger.WithContext(connection.ctx, zap.New(core))
-	connection.ctx = correlation.WithContext(connection.ctx, "connection-cid")
+	hub.logger = log
+	connection.ctx = logger.WithRequestID(connection.ctx, "connection-request")
 
 	envelope := handlerEnvelope("aggregate-1", 1)
 	envelope.ID = "message-1"
@@ -61,10 +61,10 @@ func TestHandlerContextCarriesTransportCorrelationFields(t *testing.T) {
 	}
 	fields := entries[0].ContextMap()
 	for key, want := range map[string]any{
-		"correlation_id": "connection-cid",
-		"connection_id":  "handler-connection",
-		"message_id":     "message-1",
-		"message_type":   "handler.test.v1",
+		"request_id":    "connection-request",
+		"connection_id": "handler-connection",
+		"message_id":    "message-1",
+		"message_type":  "handler.test.v1",
 	} {
 		if fields[key] != want {
 			t.Fatalf("%s = %v, want %v", key, fields[key], want)
@@ -81,7 +81,7 @@ func handlerUnitHub(
 	options := mailboxOptions()
 	options.MaxInFlightHandlersPerConnection = 4
 	options.MaxInFlightHandlers = 8
-	hub, err := NewHub(options)
+	hub, err := NewHub(testLogger(), options)
 	if err != nil {
 		t.Fatalf("NewHub: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestHandlerPanicIsContainedAndSlotsAreReleased(t *testing.T) {
 func TestHandlerRegistrationAndDecodeFailClosed(t *testing.T) {
 	t.Parallel()
 
-	hub, err := NewHub(validHubOptions())
+	hub, err := NewHub(testLogger(), validHubOptions())
 	if err != nil {
 		t.Fatalf("NewHub: %v", err)
 	}
@@ -283,7 +283,7 @@ func TestShutdownReportsNonCompliantHandler(t *testing.T) {
 	release := make(chan struct{})
 	options := mailboxOptions()
 	options.ShutdownTimeout = 50 * time.Millisecond
-	hub, err := NewHub(options)
+	hub, err := NewHub(testLogger(), options)
 	if err != nil {
 		t.Fatalf("NewHub: %v", err)
 	}

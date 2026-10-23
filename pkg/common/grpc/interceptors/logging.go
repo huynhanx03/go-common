@@ -13,8 +13,8 @@ import (
 	"github.com/huynhanx03/go-common/pkg/logger"
 )
 
-func UnaryLoggingServer(root *zap.Logger) grpc.UnaryServerInterceptor {
-	base := grpcLogger(root)
+func UnaryLoggingServer(base *logger.Logger) grpc.UnaryServerInterceptor {
+	base = base.Named("grpc")
 	return func(
 		ctx context.Context,
 		request any,
@@ -25,20 +25,18 @@ func UnaryLoggingServer(root *zap.Logger) grpc.UnaryServerInterceptor {
 			return nil, commongrpc.StatusError(commongrpc.ErrInvalidConfiguration)
 		}
 		started := time.Now()
-		ctx = logger.WithContext(ctx, base)
-		scoped := logger.FromContext(ctx)
-		scoped.Debug("rpc started",
+		base.Debug(ctx, "rpc started",
 			zap.String("method", info.FullMethod),
 			zap.Bool("stream", false),
 		)
 		response, err := handler(ctx, request)
-		logRPC(scoped, info.FullMethod, false, time.Since(started), err)
+		logRPC(base, ctx, info.FullMethod, false, time.Since(started), err)
 		return response, err
 	}
 }
 
-func StreamLoggingServer(root *zap.Logger) grpc.StreamServerInterceptor {
-	base := grpcLogger(root)
+func StreamLoggingServer(base *logger.Logger) grpc.StreamServerInterceptor {
+	base = base.Named("grpc")
 	return func(
 		server any,
 		stream grpc.ServerStream,
@@ -49,27 +47,20 @@ func StreamLoggingServer(root *zap.Logger) grpc.StreamServerInterceptor {
 			return commongrpc.StatusError(commongrpc.ErrInvalidConfiguration)
 		}
 		started := time.Now()
-		ctx := logger.WithContext(stream.Context(), base)
-		scoped := logger.FromContext(ctx)
-		scoped.Debug("rpc started",
+		ctx := stream.Context()
+		base.Debug(ctx, "rpc started",
 			zap.String("method", info.FullMethod),
 			zap.Bool("stream", true),
 		)
 		err := handler(server, &contextServerStream{ServerStream: stream, ctx: ctx})
-		logRPC(scoped, info.FullMethod, true, time.Since(started), err)
+		logRPC(base, ctx, info.FullMethod, true, time.Since(started), err)
 		return err
 	}
 }
 
-func grpcLogger(root *zap.Logger) *zap.Logger {
-	if root == nil {
-		root = zap.L()
-	}
-	return root.Named("grpc")
-}
-
 func logRPC(
-	log *zap.Logger,
+	log *logger.Logger,
+	ctx context.Context,
 	method string,
 	stream bool,
 	duration time.Duration,
@@ -84,12 +75,12 @@ func logRPC(
 	}
 	switch code {
 	case codes.OK:
-		log.Info("rpc", fields...)
+		log.Info(ctx, "rpc", fields...)
 	case codes.Canceled, codes.DeadlineExceeded:
-		log.Info("rpc", fields...)
+		log.Info(ctx, "rpc", fields...)
 	case codes.Internal, codes.DataLoss, codes.Unknown:
-		log.Error("rpc", fields...)
+		log.Error(ctx, "rpc", fields...)
 	default:
-		log.Warn("rpc", fields...)
+		log.Warn(ctx, "rpc", fields...)
 	}
 }

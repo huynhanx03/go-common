@@ -8,8 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/huynhanx03/go-common/pkg/correlation"
+	"github.com/huynhanx03/go-common/pkg/logger"
+	"go.uber.org/zap"
 )
+
+var testLog = logger.Wrap(zap.NewNop())
 
 type storeFuncs struct {
 	claim         func(context.Context, ClaimRequest) ([]ClaimedMessage, error)
@@ -84,8 +87,8 @@ func TestRelayPublishesAndFinalizesWithCorrelationAndImmutableMessage(t *testing
 		if message.Metadata.CorrelationID == "" {
 			t.Fatal("publisher received empty correlation ID")
 		}
-		if got := correlation.FromContext(publishCtx); got != message.Metadata.CorrelationID {
-			t.Fatalf("context cid = %q, message cid = %q", got, message.Metadata.CorrelationID)
+		if got := logger.RequestID(publishCtx); got != message.Metadata.CorrelationID {
+			t.Fatalf("context request ID = %q, message correlation ID = %q", got, message.Metadata.CorrelationID)
 		}
 		message.Key[0] = 'X'
 		message.Payload[0] = 'X'
@@ -93,7 +96,7 @@ func TestRelayPublishesAndFinalizesWithCorrelationAndImmutableMessage(t *testing
 		return PublishAck{Reference: "remote-1"}, nil
 	})
 
-	relay, err := New(store, publisher, nil, validOptions())
+	relay, err := New(testLog, store, publisher, nil, validOptions())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -124,7 +127,7 @@ func TestRelayPropagatesAnImmutableDestinationAllowlist(t *testing.T) {
 			return nil, nil
 		},
 	}
-	relay, err := New(store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
+	relay, err := New(testLog, store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
 		return PublishAck{}, nil
 	}), nil, options)
 	if err != nil {
@@ -160,7 +163,7 @@ func TestRelayRejectsStoreDestinationOutsideClaimAllowlist(t *testing.T) {
 	}
 	options := validOptions()
 	options.Destinations = []string{"events.allowed"}
-	relay, err := New(store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
+	relay, err := New(testLog, store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
 		published.Add(1)
 		return PublishAck{}, nil
 	}), nil, options)
@@ -267,7 +270,7 @@ func TestRelayClassifiesPublishFailures(t *testing.T) {
 			}
 			options := validOptions()
 			options.MaxAttempts = test.maxAttempts
-			relay, err := New(store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
+			relay, err := New(testLog, store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
 				return PublishAck{}, test.failure
 			}), nil, options)
 			if err != nil {

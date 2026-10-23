@@ -10,16 +10,17 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
+
+	"github.com/huynhanx03/go-common/pkg/logger"
 )
 
 func TestRecoveryWritesAtMostOneRedactedResponse(t *testing.T) {
 	core, logs := observer.New(zap.DebugLevel)
-	restore := zap.ReplaceGlobals(zap.New(core))
-	defer restore()
+	log := logger.Wrap(zap.New(core))
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	router.Use(RecoveryMiddleware)
+	router.Use(RecoveryMiddleware(log))
 	router.GET("/before-write", func(*gin.Context) { panic("password=top-secret") })
 	router.GET("/after-write", func(c *gin.Context) {
 		c.String(http.StatusOK, "already-written")
@@ -52,12 +53,11 @@ func TestRecoveryWritesAtMostOneRedactedResponse(t *testing.T) {
 
 func TestRecoveryPreservesCancellation(t *testing.T) {
 	core, logs := observer.New(zap.DebugLevel)
-	restore := zap.ReplaceGlobals(zap.New(core))
-	defer restore()
+	log := logger.Wrap(zap.New(core))
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	router.Use(RecoveryMiddleware)
+	router.Use(RecoveryMiddleware(log))
 	router.GET("/", func(*gin.Context) { panic(context.Canceled) })
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -75,12 +75,11 @@ func TestRecoveryPreservesCancellation(t *testing.T) {
 
 func TestRecoveryLogsNonCancellationPanicAfterRequestCancellation(t *testing.T) {
 	core, logs := observer.New(zap.DebugLevel)
-	restore := zap.ReplaceGlobals(zap.New(core))
-	defer restore()
+	log := logger.Wrap(zap.New(core))
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	router.Use(RecoveryMiddleware)
+	router.Use(RecoveryMiddleware(log))
 	router.GET("/", func(*gin.Context) { panic("credential=do-not-log") })
 
 	ctx, cancel := context.WithCancel(context.Background())

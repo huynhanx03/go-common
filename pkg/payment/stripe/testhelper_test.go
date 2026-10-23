@@ -7,7 +7,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/huynhanx03/go-common/pkg/logger"
 	stripesdk "github.com/stripe/stripe-go/v85"
+	"go.uber.org/zap"
 )
 
 // capturedRequest records what the stub backend received, so a test can assert
@@ -22,8 +24,7 @@ type capturedRequest struct {
 }
 
 // newTestProvider builds a provider whose Stripe client talks to a stub backend
-// that replies with body for every request. The logger is nil; the adapter's log
-// helpers are nil-safe.
+// that replies with body for every request.
 func newTestProvider(t *testing.T, body string) (*Provider, *capturedRequest) {
 	t.Helper()
 
@@ -55,8 +56,10 @@ func newTestProvider(t *testing.T, body string) (*Provider, *capturedRequest) {
 
 	client := stripesdk.NewClient("sk_test_dummy", stripesdk.WithBackends(backends))
 
-	return newWithClient(client, nil, "whsec_test"), captured
+	return newWithClient(client, logger.Wrap(zap.NewNop()), "whsec_test"), captured
 }
+
+func newTestLogger() *logger.Logger { return logger.Wrap(zap.NewNop()) }
 
 func (c *capturedRequest) formValue(key string) string {
 	values := c.form[key]

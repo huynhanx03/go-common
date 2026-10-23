@@ -22,7 +22,6 @@ import (
 
 	commongrpc "github.com/huynhanx03/go-common/pkg/common/grpc"
 	"github.com/huynhanx03/go-common/pkg/common/grpc/interceptors"
-	"github.com/huynhanx03/go-common/pkg/correlation"
 	"github.com/huynhanx03/go-common/pkg/logger"
 	"github.com/huynhanx03/go-common/pkg/security/authentication"
 	"github.com/huynhanx03/go-common/pkg/security/authorization"
@@ -63,7 +62,7 @@ func (testTransportServer) Unary(
 		return nil, errors.New("database password=secret")
 	}
 	principal, _ := authentication.FromContext(ctx)
-	return wrapperspb.String(principal.Subject + "|" + correlation.FromContext(ctx)), nil
+	return wrapperspb.String(principal.Subject + "|" + logger.RequestID(ctx)), nil
 }
 
 func (testTransportServer) Stream(stream grpc.ServerStream) error {
@@ -73,7 +72,7 @@ func (testTransportServer) Stream(stream grpc.ServerStream) error {
 	}
 	principal, _ := authentication.FromContext(stream.Context())
 	return stream.SendMsg(wrapperspb.String(
-		principal.Subject + "|" + correlation.FromContext(stream.Context()),
+		principal.Subject + "|" + logger.RequestID(stream.Context()),
 	))
 }
 
@@ -143,17 +142,18 @@ func newHarness(t *testing.T) harness {
 		}, nil
 	})
 
+	commonLogger := logger.Wrap(root)
 	server := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(
-			interceptors.UnaryCorrelationServer(commongrpc.DefaultCorrelationOptions()),
-			interceptors.UnaryLoggingServer(root),
-			interceptors.UnaryRecoveryServer(),
+			interceptors.UnaryRequestIDServer(commongrpc.DefaultRequestIDOptions()),
+			interceptors.UnaryLoggingServer(commonLogger),
+			interceptors.UnaryRecoveryServer(commonLogger),
 			interceptors.UnaryAuthenticationServer(verifier, source),
 		),
 		grpc.ChainStreamInterceptor(
-			interceptors.StreamCorrelationServer(commongrpc.DefaultCorrelationOptions()),
-			interceptors.StreamLoggingServer(root),
-			interceptors.StreamRecoveryServer(),
+			interceptors.StreamRequestIDServer(commongrpc.DefaultRequestIDOptions()),
+			interceptors.StreamLoggingServer(commonLogger),
+			interceptors.StreamRecoveryServer(commonLogger),
 			interceptors.StreamAuthenticationServer(verifier, source),
 		),
 	)
@@ -200,40 +200,37 @@ func TestBufconnCorrelationAuthenticationLoggingAndRecovery(t *testing.T) {
 	harness := newHarness(t)
 	defer harness.close()
 
-	t.Run("invalid CID is replaced and absent optional auth is anonymous", func(t *testing.T) {
+	t.Run("invalid request ID is dropped and absent optional auth is anonymous", func(t *testing.T) {
 		ctx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs(
-			strings.ToLower(correlation.Header), "invalid cid",
+			strings.ToLower(logger.RequestIDHeader), "invalid request ID",
 		))
 		response, err := invokeUnary(ctx, harness.connection, "ok")
 		if err != nil {
 			t.Fatalf("Invoke: %v", err)
 		}
 		parts := strings.Split(response.Value, "|")
-		if len(parts) != 2 || parts[0] != "" || parts[1] == "" || parts[1] == "invalid cid" {
+		if len(parts) != 2 || parts[0] != "" || parts[1] != "" {
 			t.Fatalf("response = %q", response.Value)
-		}
-		if err := correlation.Validate(parts[1]); err != nil {
-			t.Fatalf("generated CID = %q: %v", parts[1], err)
 		}
 	})
 
-	t.Run("valid auth and CID cross unary boundary", func(t *testing.T) {
+	t.Run("valid auth and request ID cross unary boundary", func(t *testing.T) {
 		ctx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs(
-			strings.ToLower(correlation.Header), "upstream-cid",
+			strings.ToLower(logger.RequestIDHeader), "upstream-request",
 			"authorization", "Bearer good",
 		))
 		response, err := invokeUnary(ctx, harness.connection, "ok")
 		if err != nil {
 			t.Fatalf("Invoke: %v", err)
 		}
-		if response.Value != "user:42|upstream-cid" {
+		if response.Value != "user:42|upstream-request" {
 			t.Fatalf("response = %q", response.Value)
 		}
 
 		found := false
 		for _, entry := range harness.logs.All() {
 			fields := entry.ContextMap()
-			if entry.Message == "rpc" && fields["correlation_id"] == "upstream-cid" {
+			if entry.Message == "rpc" && fields["request_id"] == "upstream-request" {
 				found = true
 				if fields["method"] != testUnaryMethod || fields["code"] != codes.OK.String() {
 					t.Fatalf("log fields = %+v", fields)
@@ -259,7 +256,7 @@ func TestBufconnCorrelationAuthenticationLoggingAndRecovery(t *testing.T) {
 
 	t.Run("stream context is wrapped through both interceptors", func(t *testing.T) {
 		ctx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs(
-			strings.ToLower(correlation.Header), "stream-cid",
+			strings.ToLower(logger.RequestIDHeader), "stream-request",
 			"authorization", "Bearer good",
 		))
 		stream, err := harness.connection.NewStream(
@@ -280,7 +277,7 @@ func TestBufconnCorrelationAuthenticationLoggingAndRecovery(t *testing.T) {
 		if err := stream.RecvMsg(response); err != nil {
 			t.Fatalf("RecvMsg: %v", err)
 		}
-		if response.Value != "user:42|stream-cid" {
+		if response.Value != "user:42|stream-request" {
 			t.Fatalf("response = %q", response.Value)
 		}
 	})
@@ -301,13 +298,13 @@ func TestBufconnCorrelationAuthenticationLoggingAndRecovery(t *testing.T) {
 func TestCorrelationClientInterceptorsCopyAndValidateMetadata(t *testing.T) {
 	t.Parallel()
 
-	original := metadata.Pairs(strings.ToLower(correlation.Header), "invalid cid", "caller", "kept")
+	original := metadata.Pairs(strings.ToLower(logger.RequestIDHeader), "invalid request ID", "caller", "kept")
 	ctx := metadata.NewOutgoingContext(
-		correlation.WithContext(context.Background(), "context-cid"),
+		logger.WithRequestID(context.Background(), "context-request"),
 		original,
 	)
 	var seen metadata.MD
-	err := interceptors.UnaryCorrelationClient()(
+	err := interceptors.UnaryRequestIDClient()(
 		ctx,
 		testUnaryMethod,
 		nil,
@@ -321,10 +318,10 @@ func TestCorrelationClientInterceptorsCopyAndValidateMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("interceptor: %v", err)
 	}
-	if got := seen.Get(strings.ToLower(correlation.Header)); len(got) != 1 || got[0] != "context-cid" {
-		t.Fatalf("seen CID = %v", got)
+	if got := seen.Get(strings.ToLower(logger.RequestIDHeader)); len(got) != 1 || got[0] != "context-request" {
+		t.Fatalf("seen request ID = %v", got)
 	}
-	if got := original.Get(strings.ToLower(correlation.Header)); len(got) != 1 || got[0] != "invalid cid" {
+	if got := original.Get(strings.ToLower(logger.RequestIDHeader)); len(got) != 1 || got[0] != "invalid request ID" {
 		t.Fatalf("caller metadata was mutated: %v", original)
 	}
 	if got := seen.Get("caller"); len(got) != 1 || got[0] != "kept" {
@@ -332,7 +329,7 @@ func TestCorrelationClientInterceptorsCopyAndValidateMetadata(t *testing.T) {
 	}
 
 	var streamContext context.Context
-	_, err = interceptors.StreamCorrelationClient()(
+	_, err = interceptors.StreamRequestIDClient()(
 		ctx,
 		&grpc.StreamDesc{},
 		nil,
@@ -353,28 +350,27 @@ func TestCorrelationClientInterceptorsCopyAndValidateMetadata(t *testing.T) {
 	}
 }
 
-func TestCorrelationServerReplacesDuplicateMetadataInHandlerContext(t *testing.T) {
+func TestRequestIDServerDropsDuplicateMetadataFromHandlerContext(t *testing.T) {
 	t.Parallel()
 
-	key := strings.ToLower(correlation.Header)
-	options := commongrpc.DefaultCorrelationOptions()
-	options.NewID = func() string { return "replacement-cid" }
+	key := strings.ToLower(logger.RequestIDHeader)
+	options := commongrpc.DefaultRequestIDOptions()
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
-		key, "first-cid",
-		key, "second-cid",
+		key, "first-request",
+		key, "second-request",
 		"caller", "kept",
 	))
-	_, err := interceptors.UnaryCorrelationServer(options)(
+	_, err := interceptors.UnaryRequestIDServer(options)(
 		ctx,
 		nil,
 		&grpc.UnaryServerInfo{FullMethod: testUnaryMethod},
 		func(ctx context.Context, _ any) (any, error) {
-			if got := correlation.FromContext(ctx); got != "replacement-cid" {
-				t.Fatalf("context CID = %q", got)
+			if got := logger.RequestID(ctx); got != "" {
+				t.Fatalf("context request ID = %q", got)
 			}
 			incoming, _ := metadata.FromIncomingContext(ctx)
-			if got := incoming.Get(key); len(got) != 1 || got[0] != "replacement-cid" {
-				t.Fatalf("incoming CID = %v", got)
+			if got := incoming.Get(key); len(got) != 0 {
+				t.Fatalf("incoming request ID = %v", got)
 			}
 			if got := incoming.Get("caller"); len(got) != 1 || got[0] != "kept" {
 				t.Fatalf("unrelated metadata = %v", incoming)
@@ -492,7 +488,7 @@ func TestStreamAuthorizationAndRecovery(t *testing.T) {
 		t.Fatalf("allowed error=%v calls=%d", err, handlerCalls.Load())
 	}
 
-	recovery := interceptors.StreamRecoveryServer()
+	recovery := interceptors.StreamRecoveryServer(logger.Wrap(zap.NewNop()))
 	err = recovery(
 		nil,
 		stream,
@@ -511,9 +507,8 @@ func TestRecoveryPanicTypeLogDoesNotContainValue(t *testing.T) {
 	t.Parallel()
 
 	core, logs := observer.New(zap.DebugLevel)
-	ctx := correlation.WithContext(context.Background(), "panic-cid")
-	ctx = logger.WithContext(ctx, zap.New(core))
-	_, err := interceptors.UnaryRecoveryServer()(
+	ctx := logger.WithRequestID(context.Background(), "panic-request")
+	_, err := interceptors.UnaryRecoveryServer(logger.Wrap(zap.New(core)))(
 		ctx,
 		nil,
 		&grpc.UnaryServerInfo{FullMethod: testUnaryMethod},
@@ -541,12 +536,12 @@ func TestRecoveryLogsNonCancellationPanicAfterRPCCancellation(t *testing.T) {
 
 	tests := []struct {
 		name   string
-		invoke func(context.Context) error
+		invoke func(*logger.Logger, context.Context) error
 	}{
 		{
 			name: "unary",
-			invoke: func(ctx context.Context) error {
-				_, err := interceptors.UnaryRecoveryServer()(
+			invoke: func(log *logger.Logger, ctx context.Context) error {
+				_, err := interceptors.UnaryRecoveryServer(log)(
 					ctx,
 					nil,
 					&grpc.UnaryServerInfo{FullMethod: testUnaryMethod},
@@ -559,8 +554,8 @@ func TestRecoveryLogsNonCancellationPanicAfterRPCCancellation(t *testing.T) {
 		},
 		{
 			name: "stream",
-			invoke: func(ctx context.Context) error {
-				return interceptors.StreamRecoveryServer()(
+			invoke: func(log *logger.Logger, ctx context.Context) error {
+				return interceptors.StreamRecoveryServer(log)(
 					nil,
 					fakeServerStream{ctx: ctx},
 					&grpc.StreamServerInfo{FullMethod: testStreamMethod},
@@ -578,11 +573,10 @@ func TestRecoveryLogsNonCancellationPanicAfterRPCCancellation(t *testing.T) {
 
 			core, logs := observer.New(zap.DebugLevel)
 			ctx, cancel := context.WithCancel(context.Background())
-			ctx = correlation.WithContext(ctx, "cancelled-panic-cid")
-			ctx = logger.WithContext(ctx, zap.New(core))
+			ctx = logger.WithRequestID(ctx, "cancelled-panic-request")
 			cancel()
 
-			err := test.invoke(ctx)
+			err := test.invoke(logger.Wrap(zap.New(core)), ctx)
 			if status.Code(err) != codes.Canceled {
 				t.Fatalf("recovery error = %v, want cancelled status", err)
 			}
@@ -591,7 +585,7 @@ func TestRecoveryLogsNonCancellationPanicAfterRPCCancellation(t *testing.T) {
 				t.Fatalf("non-cancellation panic was not logged exactly once: %+v", logs.All())
 			}
 			fields := entries[0].ContextMap()
-			if fields["correlation_id"] != "cancelled-panic-cid" {
+			if fields["request_id"] != "cancelled-panic-request" {
 				t.Fatalf("panic log lost correlation ID: %+v", fields)
 			}
 			for _, entry := range logs.All() {

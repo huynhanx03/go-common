@@ -17,7 +17,7 @@ func (p *Provider) FetchPaymentIntent(ctx context.Context, ref string) (*payment
 
 	live, err := p.client.V1PaymentIntents.Retrieve(ctx, ref, params)
 	if err != nil {
-		return nil, p.fail("stripe payment intent retrieve failed", err)
+		return nil, p.fail(ctx, "stripe payment intent retrieve failed", err)
 	}
 
 	return paymentIntentToNeutral(live), nil
@@ -55,7 +55,7 @@ func (p *Provider) CreateOneTimeCharge(ctx context.Context, in *payment.OneTimeC
 
 	created, err := p.client.V1PaymentIntents.Create(ctx, params)
 	if err != nil {
-		return nil, p.fail("stripe payment intent create (one-time charge) failed", err)
+		return nil, p.fail(ctx, "stripe payment intent create (one-time charge) failed", err)
 	}
 
 	return paymentIntentToNeutral(created), nil
@@ -79,7 +79,7 @@ func (p *Provider) CapturePayment(ctx context.Context, in *payment.PaymentCaptur
 
 	captured, err := p.client.V1PaymentIntents.Capture(ctx, in.PaymentIntentRef, params)
 	if err != nil {
-		return nil, p.fail("stripe payment intent capture failed", err)
+		return nil, p.fail(ctx, "stripe payment intent capture failed", err)
 	}
 
 	return paymentIntentToNeutral(captured), nil
@@ -98,7 +98,7 @@ func (p *Provider) CancelAbandoned(ctx context.Context, in *payment.PaymentInten
 
 	canceled, err := p.client.V1PaymentIntents.Cancel(ctx, in.PaymentIntentRef, params)
 	if err != nil {
-		return nil, p.fail("stripe payment intent cancel failed", err)
+		return nil, p.fail(ctx, "stripe payment intent cancel failed", err)
 	}
 
 	return paymentIntentToNeutral(canceled), nil

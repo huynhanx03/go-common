@@ -27,7 +27,7 @@ func (p *Provider) CreateSetupIntent(ctx context.Context, in *payment.NewSetupIn
 
 	created, err := p.client.V1SetupIntents.Create(ctx, params)
 	if err != nil {
-		return nil, p.fail("stripe setup intent create failed", err)
+		return nil, p.fail(ctx, "stripe setup intent create failed", err)
 	}
 
 	if created == nil {

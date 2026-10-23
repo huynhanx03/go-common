@@ -5,8 +5,12 @@ import (
 	"unsafe"
 
 	"github.com/huynhanx03/go-common/pkg/datastructs/buffer"
-	bufferpool "github.com/huynhanx03/go-common/pkg/pool/buffer"
+	"github.com/huynhanx03/go-common/pkg/pool"
 )
+
+var treeBufferPool = pool.NewResettable(func(size int) *buffer.Buffer {
+	return buffer.New(size)
+})
 
 type Tree struct {
 	buffer   *buffer.Buffer
@@ -24,11 +28,11 @@ func (t *Tree) initRootNode() {
 // NewTree returns an in-memory B+ tree.
 func NewTree() *Tree {
 	// Use pool for large 1MB buffer allocation
-	buf := bufferpool.GetSize(minSize)
+	buf := treeBufferPool.Get(minSize)
 
 	// Set callback to return to pool on Release
 	buf.ReleaseFn = func() {
-		bufferpool.Put(buf)
+		treeBufferPool.Put(buf)
 	}
 
 	t := &Tree{buffer: buf}

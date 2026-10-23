@@ -264,7 +264,7 @@ func TestHandlerUsesSmallestTimeoutAndShutdownCancellation(t *testing.T) {
 
 		options := mailboxOptions()
 		options.HandlerTimeout = time.Second
-		hub, err := NewHub(options)
+		hub, err := NewHub(testLogger(), options)
 		if err != nil {
 			t.Fatalf("NewHub: %v", err)
 		}
@@ -310,7 +310,7 @@ func TestHandlerUsesSmallestTimeoutAndShutdownCancellation(t *testing.T) {
 
 		options := mailboxOptions()
 		options.HandlerTimeout = 500 * time.Millisecond
-		hub, err := NewHub(options)
+		hub, err := NewHub(testLogger(), options)
 		if err != nil {
 			t.Fatalf("NewHub: %v", err)
 		}

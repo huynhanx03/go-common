@@ -6,27 +6,22 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
-
-	"github.com/huynhanx03/go-common/pkg/correlation"
-)
-
-const (
-	maxContextFields   = 16
-	maxFieldKeyBytes   = 64
-	maxFieldValueBytes = 1024
 )
 
 var reservedFieldKeys = map[string]struct{}{
-	"timestamp":      {},
-	"level":          {},
-	"service":        {},
-	"version":        {},
-	"environment":    {},
-	"component":      {},
-	"message":        {},
-	"cid":            {},
-	"correlation_id": {},
+	fieldTimestamp:   {},
+	fieldLevel:       {},
+	fieldService:     {},
+	fieldVersion:     {},
+	fieldEnvironment: {},
+	fieldComponent:   {},
+	fieldMessage:     {},
+	fieldRequestID:   {},
+	fieldCorrelation: {},
+	fieldTraceID:     {},
+	fieldSpanID:      {},
 }
 
 // sensitiveFieldKeys are values that must never become ambient context. A
@@ -68,7 +63,6 @@ var sensitiveFieldKeys = map[string]struct{}{
 	"token_hash":           {},
 }
 
-type loggerContextKey struct{}
 type fieldsContextKey struct{}
 
 // Field is a vendor-neutral structured logging field suitable for storage in
@@ -83,31 +77,16 @@ func String(key, value string) Field {
 	return Field{Key: key, Value: value}
 }
 
-// WithContext stores a zap.Logger in the context.
-func WithContext(ctx context.Context, l *zap.Logger) context.Context {
-	ctx = nonNilContext(ctx)
-	if l == nil {
-		return ctx
-	}
-	return context.WithValue(ctx, loggerContextKey{}, l)
-}
-
-// InheritContext copies only the raw logger and validated structured fields
-// from source into destination. Correlation IDs, authentication principals,
-// deadlines, and cancellation remain owned by their dedicated packages and
-// are intentionally not copied.
+// InheritContext copies validated structured fields from source into
+// destination. Request IDs, authentication principals, deadlines, and
+// cancellation remain attached to their own contexts.
 //
 // Use this when a long-lived operation must be rooted in a lifecycle context
-// while retaining the logger selected at a request boundary. Passing
-// FromContext(source) back into WithContext would bake source's cid into the
-// logger and cause duplicate or stale cid fields when destination is logged.
+// while retaining request-scoped log fields.
 func InheritContext(destination, source context.Context) context.Context {
 	destination = nonNilContext(destination)
 	if source == nil {
 		return destination
-	}
-	if inherited, ok := source.Value(loggerContextKey{}).(*zap.Logger); ok && inherited != nil {
-		destination = context.WithValue(destination, loggerContextKey{}, inherited)
 	}
 	fields, _ := source.Value(fieldsContextKey{}).([]Field)
 	if len(fields) == 0 {
@@ -147,30 +126,27 @@ func WithFields(ctx context.Context, fields ...Field) context.Context {
 	return context.WithValue(ctx, fieldsContextKey{}, accepted)
 }
 
-// FromContext retrieves the raw zap.Logger from context and attaches the
-// canonical correlation ID plus validated ambient fields at read time. This
-// prevents a stale cid from being baked into a logger that outlives a request.
-func FromContext(ctx context.Context) *zap.Logger {
-	ctx = nonNilContext(ctx)
-	l, ok := ctx.Value(loggerContextKey{}).(*zap.Logger)
-	if !ok || l == nil {
-		l = zap.L()
-	}
-
+func contextLogFields(ctx context.Context) []zap.Field {
 	fields, _ := ctx.Value(fieldsContextKey{}).([]Field)
-	zapFields := make([]zap.Field, 0, len(fields)+1)
-	if id := correlation.FromContext(ctx); id != "" {
-		zapFields = append(zapFields, zap.String("correlation_id", id))
+	zapFields := make([]zap.Field, 0, len(fields)+4)
+	if id := RequestID(ctx); id != "" {
+		zapFields = append(zapFields, zap.String(fieldRequestID, id))
+	}
+	if id := CorrelationID(ctx); id != "" {
+		zapFields = append(zapFields, zap.String(fieldCorrelation, id))
+	}
+	if span := trace.SpanContextFromContext(ctx); span.IsValid() {
+		zapFields = append(zapFields,
+			zap.String(fieldTraceID, span.TraceID().String()),
+			zap.String(fieldSpanID, span.SpanID().String()),
+		)
 	}
 	for _, field := range fields {
 		if validField(field) {
 			zapFields = append(zapFields, zap.String(field.Key, field.Value))
 		}
 	}
-	if len(zapFields) == 0 {
-		return l
-	}
-	return l.With(zapFields...)
+	return zapFields
 }
 
 func validField(field Field) bool {

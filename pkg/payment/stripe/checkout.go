@@ -57,7 +57,7 @@ func (p *Provider) OpenOneTimePayment(ctx context.Context, in *payment.OneTimeCh
 func (p *Provider) FetchCheckout(ctx context.Context, ref string) (*payment.Checkout, *apperr.AppError) {
 	session, err := p.client.V1CheckoutSessions.Retrieve(ctx, ref, nil)
 	if err != nil {
-		return nil, p.fail("stripe checkout session retrieve failed", err)
+		return nil, p.fail(ctx, "stripe checkout session retrieve failed", err)
 	}
 
 	return checkoutToNeutral(session), nil
@@ -66,7 +66,7 @@ func (p *Provider) FetchCheckout(ctx context.Context, ref string) (*payment.Chec
 func (p *Provider) createCheckout(ctx context.Context, params *stripesdk.CheckoutSessionCreateParams, logMsg string) (*payment.Checkout, *apperr.AppError) {
 	session, err := p.client.V1CheckoutSessions.Create(ctx, params)
 	if err != nil {
-		return nil, p.fail(logMsg, err)
+		return nil, p.fail(ctx, logMsg, err)
 	}
 
 	return checkoutToNeutral(session), nil

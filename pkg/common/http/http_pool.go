@@ -69,9 +69,8 @@ func NewHTTPClientPool(config *HTTPClientConfig) *HTTPClientPool {
 
 	client := &http.Client{
 		Timeout: config.Timeout,
-		// CorrelationRoundTripper stamps the context's correlation ID onto every
-		// outgoing request, so calls to other services keep the same cid.
-		Transport: httpRequest.CorrelationRoundTripper(&http.Transport{
+		// RequestIDRoundTripper forwards the request ID to downstream services.
+		Transport: httpRequest.RequestIDRoundTripper(&http.Transport{
 			MaxIdleConns:        config.MaxIdleConns,
 			MaxIdleConnsPerHost: config.MaxConnsPerHost,
 			IdleConnTimeout:     config.IdleConnTimeout,

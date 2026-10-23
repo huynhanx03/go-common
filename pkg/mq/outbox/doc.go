@@ -7,9 +7,9 @@
 // destination-scoped message ownership, dependency call durations, retry
 // attempts, and shutdown. Options.Destinations lets one relay own an explicit
 // subset of a shared outbox; an empty list intentionally means all destinations.
-// Wakeup is only a latency hint; polling remains the correctness path. A missing
-// correlation ID receives a deterministic message-derived fallback so retries
-// retain one trace, while malformed non-empty identifiers are terminal.
+// Wakeup is only a latency hint; polling remains the correctness path. A
+// missing request ID remains absent; malformed non-empty identifiers are
+// terminal.
 //
 // Router is an optional immutable local Publisher. It provides deterministic
 // named fan-out while Relay continues to own durable delivery semantics.

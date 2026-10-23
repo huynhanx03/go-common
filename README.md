@@ -29,12 +29,12 @@ architecture:
 
 | Capability | Packages |
 |---|---|
-| Process foundation | `pkg/common/lifecycle`, `pkg/common/health`, `pkg/common/observability`, `pkg/logger`, `pkg/settings`, `pkg/correlation` |
+| Process foundation | `pkg/common/lifecycle`, `pkg/common/health`, `pkg/common/observability`, `pkg/logger`, `pkg/settings` |
 | Security | `pkg/security/authentication`, `pkg/security/authorization`, `pkg/security/password`, `pkg/oauth` |
 | Transports | `pkg/common/http/...`, `pkg/common/grpc/...`, `pkg/common/websocket` |
 | Data boundaries | `pkg/common/tx`, `pkg/database/...`, `pkg/cdc` |
 | Messaging | `pkg/mq/forge`, `pkg/mq/outbox`, `pkg/mq/batcher`, `pkg/mq/kafka` |
-| Reusable core | `pkg/encoding/...`, `pkg/dto`, `pkg/unique`, `pkg/datastructs/...`, `pkg/pool/...`, `pkg/consistenthash` |
+| Reusable core | `pkg/bytes`, `pkg/stream`, `pkg/encoding/...`, `pkg/dto`, `pkg/unique`, `pkg/datastructs/...`, `pkg/pool/...`, `pkg/consistenthash` |
 
 Application repositories remain responsible for:
 

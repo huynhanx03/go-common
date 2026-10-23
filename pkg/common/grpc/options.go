@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/huynhanx03/go-common/pkg/correlation"
+	"github.com/huynhanx03/go-common/pkg/logger"
 )
 
 const (
@@ -23,29 +23,22 @@ const (
 
 var ErrInvalidConfiguration = errors.New("grpc: invalid configuration")
 
-// CorrelationOptions controls the single correlation metadata entry. A zero
+// RequestIDOptions controls the request ID metadata entry. A zero
 // value resolves to safe defaults.
-type CorrelationOptions struct {
+type RequestIDOptions struct {
 	MetadataKey string
-	NewID       func() string
 }
 
-func DefaultCorrelationOptions() CorrelationOptions {
-	return CorrelationOptions{
-		MetadataKey: strings.ToLower(correlation.Header),
-		NewID:       correlation.New,
-	}
+func DefaultRequestIDOptions() RequestIDOptions {
+	return RequestIDOptions{MetadataKey: strings.ToLower(logger.RequestIDHeader)}
 }
 
-func NormalizeCorrelationOptions(input CorrelationOptions) (CorrelationOptions, error) {
+func NormalizeRequestIDOptions(input RequestIDOptions) (RequestIDOptions, error) {
 	if input.MetadataKey == "" {
-		input.MetadataKey = strings.ToLower(correlation.Header)
-	}
-	if input.NewID == nil {
-		input.NewID = correlation.New
+		input.MetadataKey = strings.ToLower(logger.RequestIDHeader)
 	}
 	if !validMetadataKey(input.MetadataKey) {
-		return CorrelationOptions{}, ErrInvalidConfiguration
+		return RequestIDOptions{}, ErrInvalidConfiguration
 	}
 	return input, nil
 }
