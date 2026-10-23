@@ -56,7 +56,10 @@ func TestRelayPublishesAndFinalizesWithCorrelationAndImmutableMessage(t *testing
 		Destination: "events.created",
 		Key:         []byte("key"),
 		Payload:     []byte("payload"),
-		Metadata:    Metadata{Attributes: []Attribute{{Key: "region", Value: "west"}}},
+		Metadata: Metadata{
+			CorrelationID: "correlation-1",
+			Attributes:    []Attribute{{Key: "region", Value: "west"}},
+		},
 	}
 	lease := Lease{MessageID: original.ID, Token: "opaque", Attempt: 1}
 	var claims atomic.Int32
@@ -87,8 +90,8 @@ func TestRelayPublishesAndFinalizesWithCorrelationAndImmutableMessage(t *testing
 		if message.Metadata.CorrelationID == "" {
 			t.Fatal("publisher received empty correlation ID")
 		}
-		if got := logger.RequestID(publishCtx); got != message.Metadata.CorrelationID {
-			t.Fatalf("context request ID = %q, message correlation ID = %q", got, message.Metadata.CorrelationID)
+		if got := logger.CorrelationID(publishCtx); got != message.Metadata.CorrelationID {
+			t.Fatalf("context correlation ID = %q, message correlation ID = %q", got, message.Metadata.CorrelationID)
 		}
 		message.Key[0] = 'X'
 		message.Payload[0] = 'X'

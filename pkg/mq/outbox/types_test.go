@@ -35,17 +35,17 @@ func TestClaimAndPublishAckCloneBoundedStringsAtTrustBoundary(t *testing.T) {
 		return unsafe.String(unsafe.SliceData(backing[start:end]), end-start)
 	}
 	claimed := ClaimedMessage{
-		Lease: Lease{MessageID: alias(0, 9), Token: alias(33, 38), Attempt: 1},
+		Lease: Lease{MessageID: alias(0, 9), Token: alias(41, 46), Attempt: 1},
 		Message: Message{
 			ID: alias(0, 9), Destination: alias(10, 16),
 			Metadata: Metadata{
-				CorrelationID: alias(17, 22),
-				Attributes:    []Attribute{{Key: alias(23, 26), Value: alias(27, 32)}},
+				CorrelationID: alias(17, 30),
+				Attributes:    []Attribute{{Key: alias(31, 34), Value: alias(35, 40)}},
 			},
 		},
 	}
 	owned := cloneClaimedMessage(claimed)
-	ack := normalizedPublishAck(PublishAck{Reference: alias(39, len(backing))})
+	ack := normalizedPublishAck(PublishAck{Reference: alias(47, len(backing))})
 	for index := range backing {
 		backing[index] = 'x'
 	}

@@ -379,7 +379,7 @@ func TestRunnerShutdownIsBoundedAndIdempotent(t *testing.T) {
 func TestRunnerValidatesRegistrationAndState(t *testing.T) {
 	t.Parallel()
 
-	if _, err := New(Options{ShutdownTimeout: -time.Second}); err == nil {
+	if _, err := New(logger.Wrap(zap.NewNop()), Options{ShutdownTimeout: -time.Second}); err == nil {
 		t.Fatal("New accepted negative shutdown timeout")
 	}
 	runner := newTestRunner(t, Options{})
