@@ -8,6 +8,7 @@ import (
 
 	"github.com/IBM/sarama"
 
+	"github.com/huynhanx03/go-common/pkg/algorithm"
 	"github.com/huynhanx03/go-common/pkg/utils"
 )
 
@@ -72,7 +73,7 @@ func (c *consumerGroup) Start(ctx context.Context, topics []string, handler Hand
 				}
 
 				// Backoff before retry
-				sleepTime := utils.CalculateBackoffByTime(attempts, 1*time.Second, 30*time.Second)
+				sleepTime := algorithm.CalculateBackoffByTime(attempts, 1*time.Second, 30*time.Second)
 				time.Sleep(sleepTime)
 				attempts++
 			} else {

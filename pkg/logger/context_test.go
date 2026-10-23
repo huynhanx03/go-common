@@ -2,202 +2,139 @@ package logger
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"testing"
 
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
-
-	"github.com/huynhanx03/go-common/pkg/correlation"
-	"github.com/huynhanx03/go-common/pkg/settings"
 )
 
-func TestFromContextReturnsStoredLogger(t *testing.T) {
-	core, logs := observer.New(zap.DebugLevel)
-	ctx := WithContext(context.Background(), zap.New(core))
+func TestLoggerAddsRequestTraceAndContextFields(t *testing.T) {
+	core, observed := observer.New(zapcore.DebugLevel)
+	log := Wrap(zap.New(core))
+	ctx := WithRequestID(context.Background(), "request-42")
+	ctx = WithFields(ctx, String("operation_id", "op-7"))
+	traceID, _ := trace.TraceIDFromHex("4bf92f3577b34da6a3ce929d0e0e4736")
+	spanID, _ := trace.SpanIDFromHex("00f067aa0ba902b7")
+	ctx = trace.ContextWithSpanContext(ctx, trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: traceID, SpanID: spanID, TraceFlags: trace.FlagsSampled,
+	}))
 
-	FromContext(ctx).Info("stored")
+	log.Info(ctx, "request handled", zap.String("route", "/items"))
 
-	if logs.Len() != 1 || logs.All()[0].Message != "stored" {
-		t.Errorf("expected entry via stored logger, got %v", logs.All())
-	}
-}
-
-func TestFromContextFallbackAttachesCorrelationID(t *testing.T) {
-	core, logs := observer.New(zap.DebugLevel)
-	restore := zap.ReplaceGlobals(zap.New(core))
-	defer restore()
-
-	ctx := correlation.WithContext(context.Background(), "cid-777")
-	FromContext(ctx).Info("via fallback")
-
-	fields := logs.All()[0].ContextMap()
-	if fields["correlation_id"] != "cid-777" {
-		t.Errorf("correlation_id field = %v, want cid-777", fields["correlation_id"])
-	}
-}
-
-func TestFromContextStoredLoggerAttachesCIDAndImmutableFields(t *testing.T) {
-	core, logs := observer.New(zap.DebugLevel)
-	ctx := WithContext(context.Background(), zap.New(core))
-	ctx = correlation.WithContext(ctx, "cid-immutable")
-
-	fields := []Field{String("operation_id", "before")}
-	ctx = WithFields(ctx, fields...)
-	fields[0].Value = "after"
-
-	FromContext(ctx).Info("with fields")
-
-	entry := logs.All()[0].ContextMap()
-	if entry["correlation_id"] != "cid-immutable" {
-		t.Fatalf("correlation_id = %v, want cid-immutable", entry["correlation_id"])
-	}
-	if entry["operation_id"] != "before" {
-		t.Fatalf("operation_id = %v, want immutable value before", entry["operation_id"])
-	}
-}
-
-func TestWithFieldsRejectsReservedDuplicateAndOversizeFields(t *testing.T) {
-	core, logs := observer.New(zap.DebugLevel)
-	ctx := WithContext(context.Background(), zap.New(core))
-
-	fields := []Field{
-		String("cid", "spoofed"),
-		String("service", "spoofed"),
-		String("password", "hunter2"),
-		String("access_token", "top-secret"),
-		String("source_code", "print-secret"),
-		String("payload", "opaque-secret"),
-		String("password_hash", "credential-equivalent"),
-		String("raw_token", "opaque-secret"),
-		String("database.password", "nested-secret"),
-		String("oauth-access-token", "prefixed-secret"),
-		String("http.request_body", "unbounded-secret"),
-		String("message.source_code", "source-secret"),
-		String("message.source", "source-secret"),
-		String("service.private_key", "key-secret"),
-		String("refresh_token_id", "safe-record-reference"),
-		String("source_event_id", "safe-source-reference"),
-		String("valid", "first"),
-		String("valid", "second"),
-		String(strings.Repeat("k", maxFieldKeyBytes+1), "oversize-key"),
-		String("oversize_value", strings.Repeat("v", maxFieldValueBytes+1)),
-	}
-	for i := 0; i < maxContextFields+10; i++ {
-		fields = append(fields, String(fmt.Sprintf("field_%02d", i), "value"))
-	}
-
-	ctx = WithFields(ctx, fields...)
-	FromContext(ctx).Info("bounded")
-
-	entry := logs.All()[0].ContextMap()
-	if _, exists := entry["cid"]; exists {
-		t.Fatal("reserved cid field was accepted without a canonical correlation ID")
-	}
-	if _, exists := entry["service"]; exists {
-		t.Fatal("reserved service field was accepted")
-	}
-	for _, key := range []string{
-		"password", "access_token", "source_code", "payload", "password_hash", "raw_token",
-		"database.password", "oauth-access-token", "http.request_body",
-		"message.source_code", "message.source", "service.private_key",
-	} {
-		if _, exists := entry[key]; exists {
-			t.Fatalf("sensitive field %q was accepted", key)
-		}
-	}
-	if entry["refresh_token_id"] != "safe-record-reference" {
-		t.Fatalf("safe token record identifier was rejected: %v", entry["refresh_token_id"])
-	}
-	if entry["source_event_id"] != "safe-source-reference" {
-		t.Fatalf("safe source record identifier was rejected: %v", entry["source_event_id"])
-	}
-	if entry["valid"] != "first" {
-		t.Fatalf("duplicate key overwrote first value: %v", entry["valid"])
-	}
-	if _, exists := entry["oversize_value"]; exists {
-		t.Fatal("oversize value was accepted")
-	}
-	if got := len(entry); got != maxContextFields {
-		t.Fatalf("context fields = %d, want bounded at %d", got, maxContextFields)
-	}
-}
-
-func TestInheritContextCopiesLoggerAndFieldsWithoutDuplicatingCorrelation(t *testing.T) {
-	core, logs := observer.New(zap.DebugLevel)
-	source := WithContext(context.Background(), zap.New(core))
-	source = correlation.WithContext(source, "source-cid")
-	source = WithFields(source, String("operation_id", "operation-1"))
-
-	destination := correlation.WithContext(context.Background(), "destination-cid")
-	destination = InheritContext(destination, source)
-	FromContext(destination).Info("inherited")
-
-	entries := logs.FilterMessage("inherited").All()
+	entries := observed.All()
 	if len(entries) != 1 {
 		t.Fatalf("entries = %d, want 1", len(entries))
 	}
 	fields := entries[0].ContextMap()
-	if fields["correlation_id"] != "destination-cid" || fields["operation_id"] != "operation-1" {
-		t.Fatalf("inherited fields = %+v", fields)
+	want := map[string]string{
+		fieldRequestID: "request-42", fieldCorrelation: "request-42",
+		fieldTraceID: traceID.String(), fieldSpanID: spanID.String(),
+		"operation_id": "op-7", "route": "/items",
 	}
-	cidFields := 0
-	for _, field := range entries[0].Context {
-		if field.Key == "correlation_id" {
-			cidFields++
+	for key, value := range want {
+		if fields[key] != value {
+			t.Errorf("field %q = %v, want %q", key, fields[key], value)
 		}
 	}
-	if cidFields != 1 {
-		t.Fatalf("cid fields = %d, want exactly 1", cidFields)
-	}
 }
 
-func TestContextHelpersAreNilSafe(t *testing.T) {
-	if got := FromContext(nil); got == nil {
-		t.Fatal("FromContext(nil) returned nil logger")
-	}
-	if ctx := WithContext(nil, nil); ctx == nil {
-		t.Fatal("WithContext(nil, nil) returned nil context")
-	}
-	ctx := WithFields(nil, String("operation_id", "operation-1"))
-	if ctx == nil {
-		t.Fatal("WithFields(nil, ...) returned nil context")
-	}
-}
-
-func TestWithFieldsRejectsMalformedValues(t *testing.T) {
-	core, logs := observer.New(zap.DebugLevel)
-	ctx := WithContext(context.Background(), zap.New(core))
-	ctx = WithFields(ctx,
-		String("valid.empty", ""),
+func TestWithFieldsFiltersAndBoundsAmbientFields(t *testing.T) {
+	ctx := WithFields(nil,
+		String("valid", "first"),
+		String("VALID", "duplicate"),
+		String(fieldRequestID, "spoofed"),
+		String("password", "secret"),
 		String("invalid:key", "value"),
-		String("control", "line\nbreak"),
+		String("line_break", "one\ntwo"),
 		String("invalid_utf8", string([]byte{0xff})),
+		String("oversized_value", strings.Repeat("x", maxFieldValueBytes+1)),
 	)
-
-	FromContext(ctx).Info("validated")
-	entry := logs.All()[0].ContextMap()
-	if _, exists := entry["valid.empty"]; !exists {
-		t.Fatal("valid empty string field was rejected")
+	for index := 0; index < maxContextFields+1; index++ {
+		ctx = WithFields(ctx, String("field_"+string(rune('a'+index)), "ok"))
 	}
-	for _, key := range []string{"invalid:key", "control", "invalid_utf8"} {
-		if _, exists := entry[key]; exists {
-			t.Fatalf("malformed field %q was accepted", key)
+	core, observed := observer.New(zapcore.DebugLevel)
+	Wrap(zap.New(core)).Info(ctx, "filtered")
+	fields := observed.All()[0].ContextMap()
+	if fields["valid"] != "first" {
+		t.Fatalf("valid field = %v, want first", fields["valid"])
+	}
+	if _, exists := fields["VALID"]; exists {
+		t.Fatal("case-insensitive duplicate field was accepted")
+	}
+	for _, key := range []string{fieldRequestID, "password", "invalid:key", "line_break", "invalid_utf8", "oversized_value"} {
+		if _, exists := fields[key]; exists {
+			t.Errorf("invalid field %q was accepted", key)
 		}
 	}
 }
 
-func TestSyncIgnoresStdoutError(t *testing.T) {
-	l, err := NewLogger(LoggerConfig{Mode: settings.EnvProd})
-	if err != nil {
-		t.Fatalf("NewLogger: %v", err)
+func TestWithFieldsInheritAndNilContexts(t *testing.T) {
+	destination := WithFields(nil, String("destination", "kept"))
+	if got := InheritContext(destination, nil); got != destination {
+		t.Fatal("InheritContext with nil source changed destination")
 	}
-	l.Info("before sync")
+	if got := InheritContext(destination, context.Background()); got != destination {
+		t.Fatal("InheritContext without source fields changed destination")
+	}
+	if got := WithFields(context.Background(), String("password", "blocked")); got != context.Background() {
+		t.Fatal("WithFields with no accepted values changed the context")
+	}
+	source := WithFields(context.Background(), String("operation_id", "copied"))
+	inherited := InheritContext(destination, source)
+	core, observed := observer.New(zapcore.DebugLevel)
+	Wrap(zap.New(core)).Info(inherited, "inherited")
+	fields := observed.All()[0].ContextMap()
+	if fields["destination"] != "kept" || fields["operation_id"] != "copied" {
+		t.Fatalf("inherited fields = %#v", fields)
+	}
+}
 
-	// Under `go test`, stdout is a pipe/char device whose fsync fails —
-	// exactly the case Sync must swallow.
-	if err := l.Sync(); err != nil {
-		t.Errorf("Sync() = %v, want nil", err)
+func TestSensitiveFieldRules(t *testing.T) {
+	cases := map[string]bool{
+		"access_token": true, "api_key": true, "token": true,
+		"refresh_token_id": false, "credential_id": false,
+		"oauth.token.value": true, "request_body": true, "response.body": true,
+		"raw_body": true, "authorization_header": true,
+		"nested.password.value": true, "nested.credential.value": true,
+		"nested.authorization.header": true, "nested.authorization.value": false,
+		"nested.request.body": true, "nested.response.body": true,
+		"nested.raw.body": true, "nested.source": true,
+		"source": true, "source.id": false, "source.kind": false,
+		"source.type": false, "source.checksum": false, "source.version": false,
+		"source.payload": true, "private_key": true, "api.key": true,
+		"ordinary_field": false,
+	}
+	for key, want := range cases {
+		if got := isSensitiveFieldKey(key); got != want {
+			t.Errorf("isSensitiveFieldKey(%q) = %t, want %t", key, got, want)
+		}
+	}
+}
+
+func TestContextFieldValidation(t *testing.T) {
+	cases := []struct {
+		name  string
+		field Field
+		valid bool
+	}{
+		{"empty key", Field{Value: "v"}, false},
+		{"long key", Field{Key: strings.Repeat("k", maxFieldKeyBytes+1), Value: "v"}, false},
+		{"reserved case insensitive", Field{Key: "REQUEST_ID", Value: "v"}, false},
+		{"sensitive", Field{Key: "secret", Value: "v"}, false},
+		{"invalid key rune", Field{Key: "bad:key", Value: "v"}, false},
+		{"empty value", Field{Key: "valid.empty", Value: ""}, true},
+		{"invalid value utf8", Field{Key: "valid", Value: string([]byte{0xff})}, false},
+		{"control value", Field{Key: "valid", Value: "line\tbreak"}, false},
+		{"valid field", Field{Key: "operation-id_1.test", Value: "ok"}, true},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			if got := validField(test.field); got != test.valid {
+				t.Errorf("validField(%+v) = %t, want %t", test.field, got, test.valid)
+			}
+		})
 	}
 }

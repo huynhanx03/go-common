@@ -1,3 +1,5 @@
+//go:build integration
+
 package kafka
 
 import (
@@ -11,10 +13,6 @@ import (
 	"github.com/docker/go-connections/nat"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
-)
-
-var (
-	integrationBrokers []string
 )
 
 func TestMain(m *testing.M) {

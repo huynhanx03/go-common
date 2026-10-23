@@ -31,10 +31,17 @@ done < <(find "$workflow_root" -maxdepth 1 -type f \( -name '*.yml' -o -name '*.
 [[ "$workflow_count" -gt 0 ]] || fail 'no GitHub Actions workflows found'
 
 ci="$workflow_root/ci.yml"
-grep -Fq 'needs: [quality, unit, race, fuzz-seeds, vulnerability]' "$ci" ||
+grep -Fq 'needs: [unit, race, fuzz-seeds, integration]' "$ci" ||
+  fail 'CI test overview must wait for all test suites'
+grep -Fq 'needs: [unit, race, fuzz-seeds, integration, test-overview, quality, security, benchmarks]' "$ci" ||
   fail 'CI required gate dependency graph is incomplete'
-grep -Fq 'if: always()' "$ci" || fail 'CI required gate must observe failed dependencies'
-grep -Fq 'github.event_name == '\''workflow_dispatch'\''' "$ci" ||
-  fail 'container integration tests must remain explicitly dispatched'
+grep -Fq 'if: always()' "$ci" || fail 'CI overview and required gate must observe failed dependencies'
+grep -Fq "if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.run_integration)" "$ci" ||
+  fail 'container integration tests must run on PRs and optional manual dispatch'
+grep -Fq "if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')" "$ci" ||
+  fail 'benchmark baseline must run on main pushes and manual dispatch'
+grep -Fq 'uses: gitleaks/gitleaks-action@' "$ci" ||
+  fail 'CI must scan the repository for leaked secrets'
+grep -Fq 'govulncheck@' "$ci" || fail 'CI must scan Go dependencies for known vulnerabilities'
 
 printf '%s\n' 'workflow permissions, action pins, checkout credentials, and required gate verified'

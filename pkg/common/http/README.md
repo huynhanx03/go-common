@@ -23,7 +23,7 @@ pkg/common/http/
 │   ├── retry.go          # Generic retry with backoff
 │   └── fanout.go         # Concurrent fan-out execution
 ├── response/
-│   ├── wrapper.go        # Standardized JSON responses (+ cid on errors)
+│   ├── wrapper.go        # Standardized JSON responses (+ request_id on errors)
 │   ├── reply.go          # Created / Updated / Deleted / Paginated overrides
 │   ├── codes.go          # Code ranges → HTTP status mapping
 │   ├── messages.go       # Default messages per code
@@ -192,8 +192,8 @@ return response.Deleted(nil), nil            // DELETE      → 200, 20003
 ```
 
 Every error is attached to the Gin context (`c.Error`), so the request logger
-records the full cause chain under the request's cid — the client only ever
-sees `code + message + cid`.
+records the full cause chain under the request ID — the client only ever
+sees `code + message + request_id`.
 
 ## Error Handling
 
@@ -275,15 +275,15 @@ With pagination (from `response.Paginated` + `dto.CalculatePagination`):
 }
 ```
 
-Errors carry the request's correlation ID, so a client-side error report can
-be matched to server logs directly (`grep` the cid):
+Errors carry the request ID, so a client-side error report can
+be matched to server logs directly (`grep` the request ID):
 
 ```json
 {
     "code": 44100,
     "message": "user not found",
     "data": null,
-    "cid": "0197f6f2-6a3e-7cc0-..."
+    "request_id": "0197f6f2-6a3e-7cc0-..."
 }
 ```
 

@@ -19,7 +19,7 @@ func (p *Provider) ListPaymentMethods(ctx context.Context, customerAccountRef st
 
 	for method, err := range p.client.V1PaymentMethods.List(ctx, params).All(ctx) {
 		if err != nil {
-			return nil, p.fail("stripe payment methods list failed", err)
+			return nil, p.fail(ctx, "stripe payment methods list failed", err)
 		}
 
 		if method == nil || method.ID == "" {
@@ -43,7 +43,7 @@ func (p *Provider) Detach(ctx context.Context, in *payment.PaymentMethodDetach) 
 
 	detached, err := p.client.V1PaymentMethods.Detach(ctx, in.PaymentMethodRef, params)
 	if err != nil {
-		return nil, p.fail("stripe payment method detach failed", err)
+		return nil, p.fail(ctx, "stripe payment method detach failed", err)
 	}
 
 	if detached == nil {
@@ -79,7 +79,7 @@ func (p *Provider) UpdatePaymentMethod(ctx context.Context, in *payment.PaymentM
 
 	updated, err := p.client.V1PaymentMethods.Update(ctx, in.PaymentMethodRef, params)
 	if err != nil {
-		return nil, p.fail("stripe payment method update failed", err)
+		return nil, p.fail(ctx, "stripe payment method update failed", err)
 	}
 
 	if updated == nil {

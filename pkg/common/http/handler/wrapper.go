@@ -18,7 +18,7 @@ type HandlerFunc[T any, R any] func(context.Context, *T) (R, error)
 // default 200/CodeSuccess (see response.Created, response.Paginated).
 //
 // Every error is attached to the Gin context so the request logger records
-// its full cause chain — the client only ever sees code + message + cid.
+// its full cause chain — the client only ever sees code + message + request ID.
 func Wrap[T any, R any](h HandlerFunc[T, R]) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		req, err := request.ParseRequest[T](c)

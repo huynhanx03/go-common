@@ -29,7 +29,7 @@ func (p *Provider) ListProducts(ctx context.Context, ids []string) ([]payment.Pr
 
 		for product, err := range p.client.V1Products.List(ctx, params).All(ctx) {
 			if err != nil {
-				return nil, p.fail("stripe products list failed", err)
+				return nil, p.fail(ctx, "stripe products list failed", err)
 			}
 
 			if product == nil {
@@ -49,7 +49,7 @@ func (p *Provider) ListPrices(ctx context.Context) ([]payment.Price, *apperr.App
 
 	for price, err := range p.client.V1Prices.List(ctx, &stripesdk.PriceListParams{}).All(ctx) {
 		if err != nil {
-			return nil, p.fail("stripe prices list failed", err)
+			return nil, p.fail(ctx, "stripe prices list failed", err)
 		}
 
 		if price == nil {

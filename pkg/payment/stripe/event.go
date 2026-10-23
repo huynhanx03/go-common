@@ -1,6 +1,7 @@
 package stripe
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -14,13 +15,13 @@ import (
 
 // VerifyAndDecode authenticates a webhook delivery against the configured
 // signing secret and returns the neutral event envelope.
-func (p *Provider) VerifyAndDecode(payload []byte, signatureHeader string) (*payment.Event, *apperr.AppError) {
+func (p *Provider) VerifyAndDecode(ctx context.Context, payload []byte, signatureHeader string) (*payment.Event, *apperr.AppError) {
 	if signatureHeader == "" {
 		return nil, payment.Invalid("missing Stripe-Signature header")
 	}
 
 	if p.webhookSecret == "" {
-		p.logError("stripe webhook secret not configured", nil)
+		p.logError(ctx, "stripe webhook secret not configured", nil)
 
 		return nil, providerErr("webhook not configured")
 	}
@@ -29,13 +30,13 @@ func (p *Provider) VerifyAndDecode(payload []byte, signatureHeader string) (*pay
 		IgnoreAPIVersionMismatch: true,
 	})
 	if err != nil {
-		p.logWarn("stripe webhook signature verification failed", err)
+		p.logWarn(ctx, "stripe webhook signature verification failed", err)
 
 		return nil, payment.Invalid("signature verification failed")
 	}
 
 	if !compatibleAPIVersion(stripesdk.APIVersion, event.APIVersion) {
-		p.logError(fmt.Sprintf(
+		p.logError(ctx, fmt.Sprintf(
 			"stripe webhook endpoint is pinned to API version %q but this build expects %q: "+
 				"every delivery is rejected until the endpoint is repinned in the Stripe Dashboard",
 			event.APIVersion, stripesdk.APIVersion), nil)

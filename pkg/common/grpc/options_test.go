@@ -6,23 +6,23 @@ import (
 	"testing"
 
 	commongrpc "github.com/huynhanx03/go-common/pkg/common/grpc"
-	"github.com/huynhanx03/go-common/pkg/correlation"
+	"github.com/huynhanx03/go-common/pkg/logger"
 )
 
-func TestNormalizeCorrelationOptions(t *testing.T) {
+func TestNormalizeRequestIDOptions(t *testing.T) {
 	t.Parallel()
 
-	defaults, err := commongrpc.NormalizeCorrelationOptions(commongrpc.CorrelationOptions{})
+	defaults, err := commongrpc.NormalizeRequestIDOptions(commongrpc.RequestIDOptions{})
 	if err != nil {
-		t.Fatalf("NormalizeCorrelationOptions: %v", err)
+		t.Fatalf("NormalizeRequestIDOptions: %v", err)
 	}
-	if defaults.MetadataKey != strings.ToLower(correlation.Header) || defaults.NewID == nil {
+	if defaults.MetadataKey != strings.ToLower(logger.RequestIDHeader) {
 		t.Fatalf("defaults = %+v", defaults)
 	}
-	explicit := commongrpc.DefaultCorrelationOptions()
-	explicit.MetadataKey = "request.cid"
-	normalized, err := commongrpc.NormalizeCorrelationOptions(explicit)
-	if err != nil || normalized.MetadataKey != "request.cid" {
+	explicit := commongrpc.DefaultRequestIDOptions()
+	explicit.MetadataKey = "request.correlation-key"
+	normalized, err := commongrpc.NormalizeRequestIDOptions(explicit)
+	if err != nil || normalized.MetadataKey != "request.correlation-key" {
 		t.Fatalf("normalized=%+v error=%v", normalized, err)
 	}
 
@@ -32,7 +32,7 @@ func TestNormalizeCorrelationOptions(t *testing.T) {
 		"grpc-reserved",
 		strings.Repeat("a", 65),
 	} {
-		_, err := commongrpc.NormalizeCorrelationOptions(commongrpc.CorrelationOptions{
+		_, err := commongrpc.NormalizeRequestIDOptions(commongrpc.RequestIDOptions{
 			MetadataKey: key,
 		})
 		if !errors.Is(err, commongrpc.ErrInvalidConfiguration) {

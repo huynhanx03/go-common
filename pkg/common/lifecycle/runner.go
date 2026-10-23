@@ -37,6 +37,7 @@ type runResult struct {
 // Runner owns component registration, cancellation, and bounded reverse-order
 // shutdown. It is safe for concurrent Run and Shutdown calls.
 type Runner struct {
+	logger        *logger.Logger
 	mu            sync.Mutex
 	options       Options
 	state         runnerState
@@ -47,7 +48,10 @@ type Runner struct {
 }
 
 // New constructs a lifecycle runner.
-func New(options Options) (*Runner, error) {
+func New(log *logger.Logger, options Options) (*Runner, error) {
+	if log == nil {
+		return nil, ErrInvalidOptions
+	}
 	options = options.withDefaults()
 	if options.ShutdownTimeout <= 0 ||
 		options.ShutdownTimeout > maximumShutdownTimeout ||
@@ -56,6 +60,7 @@ func New(options Options) (*Runner, error) {
 		return nil, ErrInvalidOptions
 	}
 	return &Runner{
+		logger:       log,
 		options:      options,
 		state:        stateNew,
 		shutdownDone: make(chan struct{}),
@@ -130,7 +135,7 @@ func (runner *Runner) Run(ctx context.Context) error {
 		runCtx,
 		logger.String("component_count", strconv.Itoa(len(registrations))),
 	)
-	logger.FromContext(runLogContext).Info("lifecycle runner started")
+	runner.logger.Info(runLogContext, "lifecycle runner started")
 
 	results := make(chan runResult, len(registrations))
 	active := make(map[string]struct{}, len(registrations))
@@ -143,18 +148,17 @@ func (runner *Runner) Run(ctx context.Context) error {
 				logger.String("component_name", item.name),
 				logger.String("required", strconv.FormatBool(item.options.Required)),
 			)
-			logger.FromContext(componentContext).Debug("lifecycle component starting")
+			runner.logger.Debug(componentContext, "lifecycle component starting")
 			err := safeRun(item, runCtx)
-			componentLogger := logger.FromContext(componentContext)
 			switch {
 			case runCtx.Err() != nil:
-				componentLogger.Info("lifecycle component stopped")
+				runner.logger.Info(componentContext, "lifecycle component stopped")
 			case err != nil && item.options.Required:
-				componentLogger.Error("lifecycle required component stopped unexpectedly")
+				runner.logger.Error(componentContext, "lifecycle required component stopped unexpectedly")
 			case err != nil:
-				componentLogger.Warn("lifecycle optional component stopped")
+				runner.logger.Warn(componentContext, "lifecycle optional component stopped")
 			default:
-				componentLogger.Info("lifecycle component stopped")
+				runner.logger.Info(componentContext, "lifecycle component stopped")
 			}
 			results <- runResult{registration: item, err: err}
 		}()
@@ -196,7 +200,7 @@ waitForStop:
 	defer cleanupCancel()
 	shutdownErr := runner.Shutdown(cleanupContext)
 	drainErr := waitForRunDrain(cleanupContext, results, active, registrations)
-	logger.FromContext(runLogContext).Info("lifecycle runner stopped")
+	runner.logger.Info(runLogContext, "lifecycle runner stopped")
 	return errors.Join(primary, shutdownErr, drainErr)
 }
 
@@ -265,11 +269,11 @@ func (runner *Runner) shutdown(ctx context.Context, registrations []registration
 			componentCtx,
 			logger.String("component_name", item.name),
 		)
-		logger.FromContext(componentCtx).Debug("lifecycle component shutdown starting")
+		runner.logger.Debug(componentCtx, "lifecycle component shutdown starting")
 		err := boundedShutdown(componentCtx, item)
 		componentCancel()
 		if err != nil {
-			logger.FromContext(componentCtx).Error("lifecycle component shutdown failed")
+			runner.logger.Error(componentCtx, "lifecycle component shutdown failed")
 			failures = append(failures, &ComponentError{
 				Component: item.name,
 				Operation: "shutdown",
@@ -277,7 +281,7 @@ func (runner *Runner) shutdown(ctx context.Context, registrations []registration
 			})
 			continue
 		}
-		logger.FromContext(componentCtx).Info("lifecycle component shutdown complete")
+		runner.logger.Info(componentCtx, "lifecycle component shutdown complete")
 	}
 	return errors.Join(failures...)
 }

@@ -1,10 +1,82 @@
 package algorithm
 
 import (
+	"errors"
 	"math"
 	"math/rand"
 	"time"
+
+	"github.com/huynhanx03/go-common/pkg/utils"
 )
+
+var ErrInvalidBackoff = errors.New("invalid backoff policy")
+
+// BackoffJitter returns a non-negative amount added to an exponential delay.
+type BackoffJitter func(time.Duration) time.Duration
+
+// CalculateBackoff returns a checked, saturating exponential delay.
+func CalculateBackoff(attempt int, baseDelay, maxDelay time.Duration, jitter BackoffJitter) (time.Duration, error) {
+	if attempt < 0 || baseDelay <= 0 || maxDelay < baseDelay {
+		return 0, ErrInvalidBackoff
+	}
+	delay := baseDelay
+	for index := 0; index < attempt && delay < maxDelay; index++ {
+		if delay > maxDelay/2 {
+			delay = maxDelay
+			break
+		}
+		delay *= 2
+	}
+	if delay > maxDelay {
+		delay = maxDelay
+	}
+	if jitter == nil || delay == maxDelay {
+		return delay, nil
+	}
+	extra := jitter(delay)
+	if extra < 0 {
+		return 0, ErrInvalidBackoff
+	}
+	if extra > maxDelay-delay {
+		return maxDelay, nil
+	}
+	return delay + extra, nil
+}
+
+func defaultBackoffJitter(delay time.Duration) time.Duration {
+	return utils.JitterDurationRange(delay, 0, 0.1, rand.Float64()) - delay
+}
+
+// CalculateBackoffByTime calculates backoff capped by a maximum duration.
+// Deprecated: use CalculateBackoff and handle invalid configuration.
+func CalculateBackoffByTime(attempt int, baseDelay, maxDelay time.Duration) time.Duration {
+	delay, err := CalculateBackoff(attempt, baseDelay, maxDelay, defaultBackoffJitter)
+	if err != nil {
+		return 0
+	}
+	return delay
+}
+
+// CalculateBackoffByAttempt calculates backoff capped by a maximum attempt.
+// Deprecated: use the retry policy in pkg/common/http/request.
+func CalculateBackoffByAttempt(attempt int, baseDelay time.Duration, maxAttempts int) time.Duration {
+	if maxAttempts < 0 || baseDelay <= 0 {
+		return 0
+	}
+	maxDelay := baseDelay
+	for index := 0; index < maxAttempts; index++ {
+		if maxDelay > time.Duration(1<<63-1)/2 {
+			maxDelay = time.Duration(1<<63 - 1)
+			break
+		}
+		maxDelay *= 2
+	}
+	delay, err := CalculateBackoff(min(attempt, maxAttempts), baseDelay, maxDelay, defaultBackoffJitter)
+	if err != nil {
+		return 0
+	}
+	return delay
+}
 
 // Backoff defaults.
 const (
@@ -112,15 +184,13 @@ func NewJitterBackoff(inner Backoff) *JitterBackoff {
 
 func (b *JitterBackoff) Delay(attempt int) time.Duration {
 	d := b.inner.Delay(attempt)
-	half := d / 2
-	jitter := time.Duration(rand.Int63n(int64(half) + 1))
-	return half + jitter
+	return utils.JitterDurationRange(d, 0.5, 0, rand.Float64())
 }
 
 // -- Convenience --
 
 // DefaultExponentialBackoff creates an exponential backoff with jitter using sensible defaults.
-// 100ms → 200ms → 400ms → 800ms ... capped at 30s, with ±50% jitter.
+// 100ms → 200ms → 400ms → 800ms ... capped at 30s, with each delay randomized to [50%, 100%].
 func DefaultExponentialBackoff() Backoff {
 	return NewJitterBackoff(
 		NewExponentialBackoff(defaultInitialDelay, defaultMaxDelay, defaultMultiplier),

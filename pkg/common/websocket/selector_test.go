@@ -14,7 +14,7 @@ import (
 func TestConnectionSelectorValidation(t *testing.T) {
 	t.Parallel()
 
-	hub, err := NewHub(validHubOptions())
+	hub, err := NewHub(testLogger(), validHubOptions())
 	if err != nil {
 		t.Fatalf("NewHub: %v", err)
 	}

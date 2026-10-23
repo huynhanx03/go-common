@@ -1,6 +1,7 @@
 package stripe
 
 import (
+	"context"
 	"errors"
 	"strings"
 
@@ -15,26 +16,18 @@ const genericCardFailure = "An error occurred while processing your card. Try ag
 // fail logs the underlying error and returns the classified, client-safe
 // *apperr.AppError. Every adapter method funnels provider errors through here so
 // the raw cause is logged once and never leaks to the caller.
-func (p *Provider) fail(logMsg string, err error) *apperr.AppError {
-	p.logError(logMsg, err)
+func (p *Provider) fail(ctx context.Context, logMsg string, err error) *apperr.AppError {
+	p.logError(ctx, logMsg, err)
 
 	return failureFromError(err).ToAppError()
 }
 
-func (p *Provider) logError(msg string, err error) {
-	if p.logger == nil {
-		return
-	}
-
-	p.logger.Error(msg, zap.Error(err))
+func (p *Provider) logError(ctx context.Context, msg string, err error) {
+	p.logger.Error(ctx, msg, zap.Error(err))
 }
 
-func (p *Provider) logWarn(msg string, err error) {
-	if p.logger == nil {
-		return
-	}
-
-	p.logger.Warn(msg, zap.Error(err))
+func (p *Provider) logWarn(ctx context.Context, msg string, err error) {
+	p.logger.Warn(ctx, msg, zap.Error(err))
 }
 
 // failureFromError classifies a Stripe error into a neutral payment.Failure,

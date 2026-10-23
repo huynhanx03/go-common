@@ -3,7 +3,9 @@ package stripe
 import (
 	"testing"
 
+	"github.com/huynhanx03/go-common/pkg/logger"
 	"github.com/huynhanx03/go-common/pkg/payment"
+	"go.uber.org/zap"
 )
 
 func TestNewRequiresAPIKey(t *testing.T) {
@@ -13,7 +15,10 @@ func TestNewRequiresAPIKey(t *testing.T) {
 		t.Fatal("New must reject an empty API key")
 	}
 
-	if _, appErr := New(payment.Config{APIKey: "sk_test"}); appErr != nil {
+	if _, appErr := New(payment.Config{APIKey: "sk_test"}); appErr == nil {
+		t.Fatal("New must reject a missing logger")
+	}
+	if _, appErr := New(payment.Config{APIKey: "sk_test", Logger: logger.Wrap(zap.NewNop())}); appErr != nil {
 		t.Fatalf("New with an API key failed: %v", appErr)
 	}
 }
@@ -33,7 +38,7 @@ func TestDriverSelfRegistersAndOpens(t *testing.T) {
 		t.Fatalf("driver did not self-register; providers = %v", payment.Providers())
 	}
 
-	p, appErr := payment.Open(ProviderName, payment.Config{APIKey: "sk_test"})
+	p, appErr := payment.Open(ProviderName, payment.Config{APIKey: "sk_test", Logger: logger.Wrap(zap.NewNop())})
 	if appErr != nil {
 		t.Fatalf("Open(stripe) failed: %v", appErr)
 	}

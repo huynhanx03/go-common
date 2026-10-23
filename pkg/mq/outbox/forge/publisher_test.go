@@ -49,7 +49,7 @@ func TestPublisherPreservesBodyAndAddsBoundedInfrastructureHeaders(t *testing.T)
 		Key:         []byte("partition-key"),
 		Payload:     []byte("opaque-payload"),
 		Metadata: outbox.Metadata{
-			CorrelationID: "cid-1",
+			CorrelationID: "correlation-1",
 			Attributes: []outbox.Attribute{
 				{Key: "region", Value: "west"},
 				{Key: "schema", Value: "v1"},
@@ -74,7 +74,7 @@ func TestPublisherPreservesBodyAndAddsBoundedInfrastructureHeaders(t *testing.T)
 	}
 	wantHeaders := []forgecore.Header{
 		{Key: []byte(HeaderMessageID), Value: []byte("message-1")},
-		{Key: []byte(HeaderCorrelationID), Value: []byte("cid-1")},
+		{Key: []byte(HeaderCorrelationID), Value: []byte("correlation-1")},
 		{Key: []byte(HeaderAttributePrefix + "region"), Value: []byte("west")},
 		{Key: []byte(HeaderAttributePrefix + "schema"), Value: []byte("v1")},
 	}
@@ -134,7 +134,7 @@ func TestPublisherRejectsMissingRouteAndUnsafeMessage(t *testing.T) {
 	}{
 		{name: "missing route", message: outbox.Message{ID: "message-1", Destination: "absent"}, wantCode: CodeRouteNotConfigured},
 		{name: "empty message ID", message: outbox.Message{Destination: "events"}, wantCode: CodeInvalidMessage},
-		{name: "unsafe cid", message: outbox.Message{ID: "message-1", Destination: "events", Metadata: outbox.Metadata{CorrelationID: "bad cid"}}, wantCode: CodeInvalidMessage},
+		{name: "unsafe correlation ID", message: outbox.Message{ID: "message-1", Destination: "events", Metadata: outbox.Metadata{CorrelationID: "bad correlation ID"}}, wantCode: CodeInvalidMessage},
 		{name: "unsafe attribute", message: outbox.Message{ID: "message-1", Destination: "events", Metadata: outbox.Metadata{Attributes: []outbox.Attribute{{Key: "bad key", Value: "v"}}}}, wantCode: CodeInvalidMessage},
 	}
 	for _, test := range tests {

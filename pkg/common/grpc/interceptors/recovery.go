@@ -17,7 +17,7 @@ import (
 
 const maxStackBytes = 32 << 10
 
-func UnaryRecoveryServer() grpc.UnaryServerInterceptor {
+func UnaryRecoveryServer(log *logger.Logger) grpc.UnaryServerInterceptor {
 	return func(
 		ctx context.Context,
 		request any,
@@ -35,13 +35,13 @@ func UnaryRecoveryServer() grpc.UnaryServerInterceptor {
 			}
 			if ctx != nil && ctx.Err() != nil {
 				if !isRecoveredContextTermination(recovered) {
-					logRecoveredPanic(ctx, info.FullMethod, false, recovered)
+					logRecoveredPanic(log, ctx, info.FullMethod, false, recovered)
 				}
 				response = nil
 				err = commongrpc.StatusError(ctx.Err())
 				return
 			}
-			logRecoveredPanic(ctx, info.FullMethod, false, recovered)
+			logRecoveredPanic(log, ctx, info.FullMethod, false, recovered)
 			response = nil
 			err = status.Error(codes.Internal, "internal server error")
 		}()
@@ -49,7 +49,7 @@ func UnaryRecoveryServer() grpc.UnaryServerInterceptor {
 	}
 }
 
-func StreamRecoveryServer() grpc.StreamServerInterceptor {
+func StreamRecoveryServer(log *logger.Logger) grpc.StreamServerInterceptor {
 	return func(
 		server any,
 		stream grpc.ServerStream,
@@ -68,12 +68,12 @@ func StreamRecoveryServer() grpc.StreamServerInterceptor {
 			ctx := stream.Context()
 			if ctx != nil && ctx.Err() != nil {
 				if !isRecoveredContextTermination(recovered) {
-					logRecoveredPanic(ctx, info.FullMethod, true, recovered)
+					logRecoveredPanic(log, ctx, info.FullMethod, true, recovered)
 				}
 				err = commongrpc.StatusError(ctx.Err())
 				return
 			}
-			logRecoveredPanic(ctx, info.FullMethod, true, recovered)
+			logRecoveredPanic(log, ctx, info.FullMethod, true, recovered)
 			err = status.Error(codes.Internal, "internal server error")
 		}()
 		return handler(server, stream)
@@ -87,6 +87,7 @@ func isRecoveredContextTermination(recovered any) bool {
 }
 
 func logRecoveredPanic(
+	log *logger.Logger,
 	ctx context.Context,
 	method string,
 	stream bool,
@@ -96,7 +97,7 @@ func logRecoveredPanic(
 	if len(stack) > maxStackBytes {
 		stack = stack[:maxStackBytes]
 	}
-	logger.FromContext(ctx).Error(
+	log.Error(ctx,
 		"rpc panic recovered",
 		zap.String("method", method),
 		zap.Bool("stream", stream),

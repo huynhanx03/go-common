@@ -103,6 +103,7 @@ type Logger struct {
 
 // Redis is the configuration for Redis
 type Redis struct {
+	Namespace       string   `mapstructure:"namespace"`
 	Addrs           []string `mapstructure:"addrs"`
 	MasterName      string   `mapstructure:"master_name"`
 	Password        string   `mapstructure:"password"`

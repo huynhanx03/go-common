@@ -37,7 +37,7 @@ func TestNewPublisherClonesConcreteRouteMapAndPersistsMessage(t *testing.T) {
 	message := outbox.Message{
 		ID: "message-1", Destination: "events", Key: []byte("key"), Payload: []byte("payload"),
 		Metadata: outbox.Metadata{
-			CorrelationID: "cid-1",
+			CorrelationID: "correlation-1",
 			Attributes:    []outbox.Attribute{{Key: "schema", Value: "v1"}},
 		},
 	}
@@ -61,7 +61,7 @@ func TestNewPublisherClonesConcreteRouteMapAndPersistsMessage(t *testing.T) {
 	}
 	wantHeaders := []forgecore.Header{
 		{Key: []byte(HeaderMessageID), Value: []byte("message-1")},
-		{Key: []byte(HeaderCorrelationID), Value: []byte("cid-1")},
+		{Key: []byte(HeaderCorrelationID), Value: []byte("correlation-1")},
 		{Key: []byte(HeaderAttributePrefix + "schema"), Value: []byte("v1")},
 	}
 	if !equalHeaders(delivery.Headers, wantHeaders) {

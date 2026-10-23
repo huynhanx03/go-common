@@ -6,34 +6,34 @@ import (
 
 	"github.com/IBM/sarama"
 
-	"github.com/huynhanx03/go-common/pkg/correlation"
 	"github.com/huynhanx03/go-common/pkg/encoding/json"
+	"github.com/huynhanx03/go-common/pkg/logger"
 )
 
 // buildContext creates a context from the message headers, restoring the
 // correlation ID stamped by the producer so consumer logs correlate with the
-// request that published the message. Messages without one get a fresh cid.
+// request that published the message. Messages without one remain uncorrelated.
 func buildContext(headers []*sarama.RecordHeader) context.Context {
 	ctx := context.Background()
 
 	for _, h := range headers {
-		if string(h.Key) == correlation.Header {
-			ctx = correlation.WithContext(ctx, string(h.Value))
+		if string(h.Key) == logger.RequestIDHeader {
+			ctx = logger.WithRequestID(ctx, string(h.Value))
 			break
 		}
 	}
 
-	return correlation.EnsureContext(ctx)
+	return ctx
 }
 
 // buildHeaders carries the context's correlation ID into Kafka record headers.
 func buildHeaders(ctx context.Context) []sarama.RecordHeader {
-	id := correlation.FromContext(ctx)
+	id := logger.RequestID(ctx)
 	if id == "" {
 		return nil
 	}
 	return []sarama.RecordHeader{{
-		Key:   []byte(correlation.Header),
+		Key:   []byte(logger.RequestIDHeader),
 		Value: []byte(id),
 	}}
 }

@@ -272,17 +272,17 @@ func (hub *Hub) executeHandler(invocation handlerInvocation) {
 		logger.String("message_type", invocation.registration.messageType),
 	)
 	started := time.Now()
-	log := logger.FromContext(ctx)
-	log.Debug("websocket handler started")
+	log := hub.logger
+	log.Debug(ctx, "websocket handler started")
 
 	err := hub.invokeHandler(ctx, invocation)
 	duration := time.Since(started)
 	if err == nil {
-		log.Debug("websocket handler completed", zap.Duration("duration", duration))
+		log.Debug(ctx, "websocket handler completed", zap.Duration("duration", duration))
 		return
 	}
 	hub.metrics.inboundErrors.Add(1)
-	log.Warn(
+	log.Warn(ctx,
 		"websocket handler failed",
 		zap.String("error_type", fmt.Sprintf("%T", err)),
 		zap.Duration("duration", duration),
@@ -396,7 +396,7 @@ func (hub *Hub) logHandlerPanic(
 	if len(stack) > maxHandlerStackBytes {
 		stack = stack[:maxHandlerStackBytes]
 	}
-	logger.FromContext(ctx).Error(
+	hub.logger.Error(ctx,
 		"websocket handler panic recovered",
 		zap.String("panic_type", fmt.Sprintf("%T", recovered)),
 		zap.ByteString("stack", stack),
