@@ -876,6 +876,9 @@ func TestConsumerRollbackAndReplayDoNotAcknowledge(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if err := producer.Flush(); err != nil {
+		t.Fatal(err)
+	}
 
 	consumer, err := broker.NewConsumer("projector", "events")
 	if err != nil {
