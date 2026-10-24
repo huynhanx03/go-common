@@ -108,10 +108,7 @@ func (c *Cache[K, V]) Revoke(ctx context.Context, key string) error {
 	if !ok {
 		return cache.ErrInvalidConfig
 	}
-	negativeKey, ok := stringCacheKey[K](key + cache.NegativeKeySuffix)
-	if !ok {
-		return cache.ErrInvalidConfig
-	}
+	negativeKey, _ := stringCacheKey[K](key + cache.NegativeKeySuffix)
 	versionKey, unlock, err := c.lockVersion(ctx, key)
 	if err != nil {
 		return err
@@ -134,12 +131,6 @@ func (c *Cache[K, V]) RevokeMany(ctx context.Context, keys ...string) error {
 			return cache.ErrInvalidConfig
 		}
 		if _, ok := stringCacheKey[K](key); !ok {
-			return cache.ErrInvalidConfig
-		}
-		if _, ok := stringCacheKey[K](key + cache.NegativeKeySuffix); !ok {
-			return cache.ErrInvalidConfig
-		}
-		if _, ok := stringCacheKey[K](versionKey(key)); !ok {
 			return cache.ErrInvalidConfig
 		}
 	}

@@ -58,6 +58,26 @@ func TestSetGetDelete(t *testing.T) {
 	}
 }
 
+func TestNumericKeysRemainUnmodified(t *testing.T) {
+	c, err := New[uint64, string]()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.Close)
+	ctx := context.Background()
+
+	if !c.Set(42, "value") {
+		t.Fatal("Set returned false")
+	}
+	if value, ok := c.Get(ctx, 42); !ok || value != "value" {
+		t.Fatalf("Get(42) = %q, %v; want value, true", value, ok)
+	}
+	c.Delete(42)
+	if _, ok := c.Get(ctx, 42); ok {
+		t.Fatal("numeric key remained after Delete")
+	}
+}
+
 func TestSetWithTTL(t *testing.T) {
 	t.Run("rejects non-positive TTL", func(t *testing.T) {
 		c := newTestCache(t)
