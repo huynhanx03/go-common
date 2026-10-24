@@ -1,6 +1,6 @@
 module github.com/huynhanx03/go-common
 
-go 1.27.9
+go 1.27.3
 
 require (
 	entgo.io/ent v0.14.6
