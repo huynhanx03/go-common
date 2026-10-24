@@ -1,6 +1,6 @@
 package stripe
 
-import stripesdk "github.com/stripe/stripe-go/v85"
+import stripesdk "github.com/stripe/stripe-go/v87"
 
 // setIdempotency forwards a caller's idempotency key to Stripe so an identical
 // retry is de-duplicated. An empty key is left unset.

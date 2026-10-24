@@ -125,7 +125,7 @@ func TestGetRejectsUnexpectedStoredType(t *testing.T) {
 	}
 	t.Cleanup(c.Close)
 	ctx := context.Background()
-	c.inner.Set(hashKey("key"), 42, defaultCost)
+	c.inner.Set(dataCacheKey("key"), 42, defaultCost)
 	c.inner.Wait()
 	if _, ok := c.Get(ctx, "key"); ok {
 		t.Fatal("Get accepted a value with the wrong type")

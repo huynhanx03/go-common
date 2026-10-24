@@ -7,11 +7,8 @@ import (
 	"github.com/huynhanx03/go-common/pkg/hash"
 )
 
-const defaultCost int64 = 1
-
-func hashKey[K hash.Key](key K) uint64 { return hash.Sum64(key) }
-
-func (c *Cache[K, V]) write(key uint64, value any, ttl time.Duration) bool {
+func (c *Cache[K, V]) write(key K, value any, ttl time.Duration) bool {
+	key = dataCacheKey(key)
 	var accepted bool
 	if ttl == 0 {
 		accepted = c.inner.Set(key, value, defaultCost)
@@ -22,9 +19,9 @@ func (c *Cache[K, V]) write(key uint64, value any, ttl time.Duration) bool {
 	return accepted
 }
 
-func (c *Cache[K, V]) delete(keys ...uint64) {
+func (c *Cache[K, V]) delete(keys ...K) {
 	for _, key := range keys {
-		c.inner.Del(key)
+		c.inner.Del(dataCacheKey(key))
 	}
 	c.inner.Wait()
 }
@@ -37,7 +34,7 @@ func (c *Cache[K, V]) Get(ctx context.Context, key K) (V, bool) {
 	}
 	token := c.mu.RLock()
 	defer c.mu.RUnlock(token)
-	value, ok := c.inner.Get(hashKey(key))
+	value, ok := c.inner.Get(dataCacheKey(key))
 	if !ok {
 		return zero, false
 	}
@@ -52,7 +49,7 @@ func (c *Cache[K, V]) Get(ctx context.Context, key K) (V, bool) {
 func (c *Cache[K, V]) Set(key K, value V) bool {
 	token := c.mu.RLock()
 	defer c.mu.RUnlock(token)
-	return c.write(hashKey(key), value, 0)
+	return c.write(key, value, 0)
 }
 
 // SetWithTTL adds or updates a value with a TTL.
@@ -62,14 +59,14 @@ func (c *Cache[K, V]) SetWithTTL(ctx context.Context, key K, value V, ttl time.D
 	}
 	token := c.mu.RLock()
 	defer c.mu.RUnlock(token)
-	return c.write(hashKey(key), value, ttl)
+	return c.write(key, value, ttl)
 }
 
 // Delete removes a value from the cache.
 func (c *Cache[K, V]) Delete(key K) {
 	token := c.mu.RLock()
 	defer c.mu.RUnlock(token)
-	c.delete(hashKey(key))
+	c.delete(key)
 }
 
 // Clear removes all items from the cache.
@@ -77,4 +74,11 @@ func (c *Cache[K, V]) Clear() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.inner.Clear()
+}
+
+func dataCacheKey[K hash.Key](key K) K {
+	if value, ok := any(key).(string); ok {
+		return any(dataKeyPrefix + value).(K)
+	}
+	return key
 }

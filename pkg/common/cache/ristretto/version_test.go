@@ -179,18 +179,18 @@ func TestVersionOperationsFailAfterClose(t *testing.T) {
 func TestVersionOperationsReportRistrettoWriteRejection(t *testing.T) {
 	c := newTestCache(t)
 	c.inner.Close()
-	if err := c.writeVersionedValue(hashKey("key"), "value", time.Minute); !errors.Is(err, errConditionalWriteFailed) {
+	if err := c.writeVersionedValue("key", "value", time.Minute); !errors.Is(err, errConditionalWriteFailed) {
 		t.Fatalf("writeVersionedValue() error = %v; want %v", err, errConditionalWriteFailed)
 	}
 	if err := c.Revoke(context.Background(), "key"); err == nil {
-		t.Fatal("Revoke hid generation write rejection")
+		t.Fatal("Revoke hid version write rejection")
 	}
 	if _, err := c.SnapshotVersion(context.Background(), "new-key"); err == nil {
-		t.Fatal("SnapshotVersion hid generation write rejection")
+		t.Fatal("SnapshotVersion hid version write rejection")
 	}
 }
 
-func TestGenerationReportsRandomSourceFailure(t *testing.T) {
+func TestVersionReportsRandomSourceFailure(t *testing.T) {
 	previous := rand.Reader
 	rand.Reader = errorReader{}
 	t.Cleanup(func() { rand.Reader = previous })
@@ -228,11 +228,11 @@ func TestRevokeManyHandlesEmptyInvalidCanceledAndClosedRequests(t *testing.T) {
 	}
 }
 
-func TestRevokeManyReturnsRejectedGenerationWrites(t *testing.T) {
+func TestRevokeManyReturnsRejectedVersionWrites(t *testing.T) {
 	c := newTestCache(t)
 	c.inner.Close()
-	if err := c.RevokeMany(context.Background(), "one", "two"); !errors.Is(err, errGenerationWriteRejected) {
-		t.Fatalf("RevokeMany() error = %v; want generation write rejection", err)
+	if err := c.RevokeMany(context.Background(), "one", "two"); !errors.Is(err, errVersionWriteRejected) {
+		t.Fatalf("RevokeMany() error = %v; want version write rejection", err)
 	}
 }
 

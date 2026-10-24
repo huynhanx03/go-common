@@ -6,7 +6,7 @@ import (
 
 	"github.com/huynhanx03/go-common/pkg/common/apperr"
 	"github.com/huynhanx03/go-common/pkg/payment"
-	stripesdk "github.com/stripe/stripe-go/v85"
+	stripesdk "github.com/stripe/stripe-go/v87"
 )
 
 // FetchPaymentIntent retrieves a payment intent with its latest card details

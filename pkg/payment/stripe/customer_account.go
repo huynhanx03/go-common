@@ -5,7 +5,7 @@ import (
 
 	"github.com/huynhanx03/go-common/pkg/common/apperr"
 	"github.com/huynhanx03/go-common/pkg/payment"
-	stripesdk "github.com/stripe/stripe-go/v85"
+	stripesdk "github.com/stripe/stripe-go/v87"
 )
 
 // CreateCustomerAccount creates a V2 customer account, requesting the automatic

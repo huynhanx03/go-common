@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/huynhanx03/go-common/pkg/logger"
-	stripesdk "github.com/stripe/stripe-go/v85"
+	stripesdk "github.com/stripe/stripe-go/v87"
 	"go.uber.org/zap"
 )
 

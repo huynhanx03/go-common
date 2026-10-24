@@ -5,7 +5,7 @@ import (
 
 	"github.com/huynhanx03/go-common/pkg/common/apperr"
 	"github.com/huynhanx03/go-common/pkg/payment"
-	stripesdk "github.com/stripe/stripe-go/v85"
+	stripesdk "github.com/stripe/stripe-go/v87"
 )
 
 // setupIntentUsage stores the method for off-session (later, unattended) charges.
@@ -18,10 +18,10 @@ func (p *Provider) CreateSetupIntent(ctx context.Context, in *payment.NewSetupIn
 	}
 
 	params := &stripesdk.SetupIntentCreateParams{
-		CustomerAccount:    stripesdk.String(in.CustomerAccountRef),
-		Usage:              stripesdk.String(setupIntentUsage),
-		PaymentMethodTypes: []*string{stripesdk.String(string(payment.PaymentMethodTypeCard))},
-		Metadata:           in.Metadata,
+		CustomerAccount:           stripesdk.String(in.CustomerAccountRef),
+		Usage:                     stripesdk.String(setupIntentUsage),
+		AllowedPaymentMethodTypes: []*string{stripesdk.String(string(payment.PaymentMethodTypeCard))},
+		Metadata:                  in.Metadata,
 	}
 	setIdempotency(&params.Params, in.IdempotencyKey)
 
