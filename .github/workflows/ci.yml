@@ -2,15 +2,6 @@ name: ci
 
 on:
   pull_request:
-  push:
-    branches: [main]
-  workflow_dispatch:
-    inputs:
-      run_integration:
-        description: Run container-backed integration tests
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -25,7 +16,6 @@ env:
 jobs:
   unit:
     name: Unit tests and coverage
-    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -50,7 +40,6 @@ jobs:
 
   race:
     name: Race tests
-    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -66,7 +55,6 @@ jobs:
 
   fuzz-seeds:
     name: Fuzz seed corpus
-    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -82,7 +70,6 @@ jobs:
 
   integration:
     name: Container integration tests
-    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.run_integration)
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -94,11 +81,11 @@ jobs:
           go-version-file: go.mod
           cache: true
       - run: go mod download
-      - run: ./scripts/test-integration.sh
+      - run: make test-integration
 
   test-overview:
     name: Test Overview
-    if: always() && github.event_name != 'push'
+    if: always()
     needs: [unit, race, fuzz-seeds, integration]
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -125,7 +112,7 @@ jobs:
 
   quality:
     name: Quality checks
-    if: always() && github.event_name != 'push'
+    if: always()
     needs: [test-overview]
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -151,7 +138,7 @@ jobs:
 
   security:
     name: Security scans
-    if: always() && github.event_name != 'push'
+    if: always()
     needs: [quality]
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -175,41 +162,15 @@ jobs:
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: false
           GITLEAKS_ENABLE_SUMMARY: true
 
-  benchmarks:
-    name: Benchmark baseline
-    if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    needs: [security]
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
-        with:
-          go-version-file: go.mod
-          cache: true
-      - run: go mod download
-      - name: Capture benchmark matrix
-        run: make benchmarks | tee benchmark.txt
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: go-common-benchmark-${{ github.sha }}
-          path: benchmark.txt
-          if-no-files-found: error
-          retention-days: 90
-
   gate:
     name: Required gate
-    if: always() && github.event_name != 'push'
-    needs: [unit, race, fuzz-seeds, integration, test-overview, quality, security, benchmarks]
+    if: always()
+    needs: [unit, race, fuzz-seeds, integration, test-overview, quality, security]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Require tests, quality, and security to pass
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          RUN_INTEGRATION: ${{ inputs.run_integration }}
           UNIT_RESULT: ${{ needs.unit.result }}
           RACE_RESULT: ${{ needs.race.result }}
           FUZZ_RESULT: ${{ needs.fuzz-seeds.result }}
@@ -217,7 +178,6 @@ jobs:
           TEST_OVERVIEW_RESULT: ${{ needs.test-overview.result }}
           QUALITY_RESULT: ${{ needs.quality.result }}
           SECURITY_RESULT: ${{ needs.security.result }}
-          BENCHMARK_RESULT: ${{ needs.benchmarks.result }}
         run: |
           for result in \
             "$UNIT_RESULT" \
@@ -231,23 +191,3 @@ jobs:
               exit 1
             fi
           done
-
-          if [[ "$EVENT_NAME" != workflow_dispatch || "$RUN_INTEGRATION" == true ]]; then
-            [[ "$INTEGRATION_RESULT" == success ]] || {
-              echo "::error::Container integration tests did not pass (result=$INTEGRATION_RESULT)."
-              exit 1
-            }
-          elif [[ "$INTEGRATION_RESULT" != skipped ]]; then
-            echo "::error::Unexpected container integration result: $INTEGRATION_RESULT."
-            exit 1
-          fi
-
-          if [[ "$EVENT_NAME" == push || "$EVENT_NAME" == workflow_dispatch ]]; then
-            [[ "$BENCHMARK_RESULT" == success ]] || {
-              echo "::error::Benchmark baseline did not complete (result=$BENCHMARK_RESULT)."
-              exit 1
-            }
-          elif [[ "$BENCHMARK_RESULT" != skipped ]]; then
-            echo "::error::Unexpected benchmark result: $BENCHMARK_RESULT."
-            exit 1
-          fi
