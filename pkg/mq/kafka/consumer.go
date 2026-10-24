@@ -9,7 +9,7 @@ import (
 	"github.com/IBM/sarama"
 
 	"github.com/huynhanx03/go-common/pkg/algorithm"
-	"github.com/huynhanx03/go-common/pkg/utils"
+	"github.com/huynhanx03/go-common/pkg/timer"
 )
 
 // consumerGroup wraps sarama.ConsumerGroup
@@ -30,9 +30,9 @@ func NewConsumer(cfg *Config, groupID string, mws ...Middleware) (ConsumerGroup,
 	// Rebalance Strategy
 	config.Consumer.Group.Rebalance.Strategy = sarama.NewBalanceStrategySticky()
 	config.Consumer.Offsets.Initial = sarama.OffsetOldest
-	config.Consumer.Group.Session.Timeout = utils.ToDurationMs(cfg.ConsumerInfo.SessionTimeout)
+	config.Consumer.Group.Session.Timeout = timer.ToDurationMs(cfg.ConsumerInfo.SessionTimeout)
 	if cfg.ConsumerInfo.MaxProcessingTime > 0 {
-		config.Consumer.MaxProcessingTime = utils.ToDurationMs(cfg.ConsumerInfo.MaxProcessingTime)
+		config.Consumer.MaxProcessingTime = timer.ToDurationMs(cfg.ConsumerInfo.MaxProcessingTime)
 	}
 
 	client, err := sarama.NewConsumerGroup(cfg.Brokers, groupID, config)

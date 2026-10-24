@@ -6,7 +6,7 @@ import (
 	"math/rand"
 	"time"
 
-	"github.com/huynhanx03/go-common/pkg/utils"
+	"github.com/huynhanx03/go-common/pkg/timer"
 )
 
 var ErrInvalidBackoff = errors.New("invalid backoff policy")
@@ -44,7 +44,7 @@ func CalculateBackoff(attempt int, baseDelay, maxDelay time.Duration, jitter Bac
 }
 
 func defaultBackoffJitter(delay time.Duration) time.Duration {
-	return utils.JitterDurationRange(delay, 0, 0.1, rand.Float64()) - delay
+	return timer.JitterDurationRange(delay, 0, 0.1, rand.Float64()) - delay
 }
 
 // CalculateBackoffByTime calculates backoff capped by a maximum duration.
@@ -184,7 +184,7 @@ func NewJitterBackoff(inner Backoff) *JitterBackoff {
 
 func (b *JitterBackoff) Delay(attempt int) time.Duration {
 	d := b.inner.Delay(attempt)
-	return utils.JitterDurationRange(d, 0.5, 0, rand.Float64())
+	return timer.JitterDurationRange(d, 0.5, 0, rand.Float64())
 }
 
 // -- Convenience --

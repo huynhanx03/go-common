@@ -1,9 +1,18 @@
-package utils
+package timer
 
 import (
 	"testing"
 	"time"
 )
+
+func TestDurationConversions(t *testing.T) {
+	if got := ToDuration(3); got != 3*time.Second {
+		t.Fatalf("ToDuration(3) = %s; want %s", got, 3*time.Second)
+	}
+	if got := ToDurationMs(int32(250)); got != 250*time.Millisecond {
+		t.Fatalf("ToDurationMs(250) = %s; want %s", got, 250*time.Millisecond)
+	}
+}
 
 func TestJitterDuration(t *testing.T) {
 	tests := []struct {

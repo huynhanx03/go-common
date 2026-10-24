@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/huynhanx03/go-common/pkg/utils"
+	"github.com/huynhanx03/go-common/pkg/timer"
 
 	"github.com/IBM/sarama"
 )
@@ -25,7 +25,7 @@ func NewProducer(cfg *Config) (Producer, error) {
 	// Efficiency: Use Compression (Snappy is good balance)
 	config.Producer.Compression = sarama.CompressionSnappy
 	// Batching: Higher throughput
-	config.Producer.Flush.Frequency = utils.ToDurationMs(cfg.ProducerInfo.FlushFrequency)
+	config.Producer.Flush.Frequency = timer.ToDurationMs(cfg.ProducerInfo.FlushFrequency)
 	config.Producer.Flush.Bytes = cfg.ProducerInfo.FlushBytes
 
 	// Channels must be enabled to handle returns

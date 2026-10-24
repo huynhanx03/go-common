@@ -6,7 +6,7 @@ import (
 
 	"github.com/IBM/sarama"
 
-	"github.com/huynhanx03/go-common/pkg/utils"
+	"github.com/huynhanx03/go-common/pkg/timer"
 )
 
 // syncProducer wraps sarama.SyncProducer for reliable, blocking sends.
@@ -25,7 +25,7 @@ func NewSyncProducer(cfg *Config) (SyncProducer, error) {
 
 	// Retry: Retry when network fails
 	config.Producer.Retry.Max = cfg.ProducerInfo.MaxRetries
-	config.Producer.Retry.Backoff = utils.ToDurationMs(cfg.ProducerInfo.RetryBackoff)
+	config.Producer.Retry.Backoff = timer.ToDurationMs(cfg.ProducerInfo.RetryBackoff)
 
 	// SyncProducer specific: Return Successes channel
 	config.Producer.Return.Successes = true

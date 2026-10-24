@@ -9,7 +9,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/huynhanx03/go-common/pkg/algorithm"
-	"github.com/huynhanx03/go-common/pkg/utils"
+	"github.com/huynhanx03/go-common/pkg/timer"
 )
 
 var refreshSlots = make(chan struct{}, maxConcurrentRefreshes)
@@ -193,13 +193,13 @@ func jitterTTL(ttl time.Duration) time.Duration {
 	if ttl <= 0 {
 		return ttl
 	}
-	return utils.JitterDuration(ttl, cacheTTLJitterFraction, rand.Float64())
+	return timer.JitterDuration(ttl, cacheTTLJitterFraction, rand.Float64())
 }
 
 func (e entry[T]) shouldRefresh() bool {
 	return algorithm.XFetchShouldRefresh(
 		time.UnixMilli(e.ExpireAt),
-		utils.ToDurationMs(e.DeltaMs),
+		timer.ToDurationMs(e.DeltaMs),
 		xfetchBeta,
 	)
 }

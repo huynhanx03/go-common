@@ -12,7 +12,7 @@ import (
 
 	"github.com/huynhanx03/go-common/pkg/common/cache"
 	"github.com/huynhanx03/go-common/pkg/settings"
-	"github.com/huynhanx03/go-common/pkg/utils"
+	"github.com/huynhanx03/go-common/pkg/timer"
 )
 
 const (
@@ -74,12 +74,12 @@ func (r *RedisEngine) connect() error {
 		PoolSize:        r.config.PoolSize,
 		MinIdleConns:    r.config.MinIdleConns,
 		MaxRetries:      r.config.MaxRetries,
-		DialTimeout:     utils.ToDuration(r.config.DialTimeout),
-		ReadTimeout:     utils.ToDuration(r.config.ReadTimeout),
-		WriteTimeout:    utils.ToDuration(r.config.WriteTimeout),
-		PoolTimeout:     utils.ToDuration(r.config.PoolTimeout),
-		MinRetryBackoff: utils.ToDurationMs(r.config.MinRetryBackoff),
-		MaxRetryBackoff: utils.ToDurationMs(r.config.MaxRetryBackoff),
+		DialTimeout:     timer.ToDuration(r.config.DialTimeout),
+		ReadTimeout:     timer.ToDuration(r.config.ReadTimeout),
+		WriteTimeout:    timer.ToDuration(r.config.WriteTimeout),
+		PoolTimeout:     timer.ToDuration(r.config.PoolTimeout),
+		MinRetryBackoff: timer.ToDurationMs(r.config.MinRetryBackoff),
+		MaxRetryBackoff: timer.ToDurationMs(r.config.MaxRetryBackoff),
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
