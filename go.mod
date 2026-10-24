@@ -1,6 +1,6 @@
 module github.com/huynhanx03/go-common
 
-go 1.27.1
+go 1.27.9
 
 require (
 	entgo.io/ent v0.14.6
@@ -10,7 +10,6 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/coder/websocket v1.8.15
 	github.com/dgraph-io/ristretto/v2 v2.4.2
-	github.com/docker/go-connections v0.8.2
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-playground/validator/v10 v10.30.5
 	github.com/go-sql-driver/mysql v1.10.1
@@ -57,6 +56,7 @@ require (
 	github.com/cpuguy83/dockercfg v0.3.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
+	github.com/docker/go-connections v0.8.2 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/eapache/go-resiliency v1.7.0 // indirect

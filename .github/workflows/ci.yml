@@ -107,7 +107,7 @@ jobs:
             echo "| Fuzz seed corpus | $FUZZ_RESULT |"
             echo "| Container integration tests | $INTEGRATION_RESULT |"
             echo
-            echo 'Coverage profile: download the `go-common-coverage-${{ github.sha }}` artifact.'
+            echo "Coverage profile: download the `go-common-coverage-${GITHUB_SHA}` artifact."
           } >> "$GITHUB_STEP_SUMMARY"
 
   quality:

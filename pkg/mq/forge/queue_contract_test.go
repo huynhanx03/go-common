@@ -872,7 +872,7 @@ func TestConsumerRollbackAndReplayDoNotAcknowledge(t *testing.T) {
 		t.Fatal(err)
 	}
 	for index := 0; index < 2; index++ {
-		if err := producer.Send(nil, []byte(strconv.Itoa(index)), nil); err != nil {
+		if err := producer.SendContext(context.Background(), nil, []byte(strconv.Itoa(index)), nil, AckAppend); err != nil {
 			t.Fatal(err)
 		}
 	}
