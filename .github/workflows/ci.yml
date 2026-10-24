@@ -183,6 +183,7 @@ jobs:
             "$UNIT_RESULT" \
             "$RACE_RESULT" \
             "$FUZZ_RESULT" \
+            "$INTEGRATION_RESULT" \
             "$TEST_OVERVIEW_RESULT" \
             "$QUALITY_RESULT" \
             "$SECURITY_RESULT"; do
