@@ -21,6 +21,9 @@ if [[ -z "${actual}" ]]; then
   echo "could not calculate total statement coverage" >&2
   exit 1
 fi
+if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+  printf 'total=%s\nminimum=%s\n' "${actual}" "${minimum}" >> "${GITHUB_OUTPUT}"
+fi
 if ! awk -v actual="${actual}" -v minimum="${minimum}" 'BEGIN {
   exit !(actual + 0 >= minimum + 0)
 }'; then

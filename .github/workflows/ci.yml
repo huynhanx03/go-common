@@ -16,6 +16,9 @@ env:
 jobs:
   unit:
     name: Unit tests and coverage
+    outputs:
+      coverage: ${{ steps.coverage.outputs.total }}
+      minimum_coverage: ${{ steps.coverage.outputs.minimum }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -28,6 +31,7 @@ jobs:
           cache: true
       - run: go mod download
       - name: Test with coverage threshold
+        id: coverage
         env:
           COVER_PROFILE: coverage.out
         run: ./scripts/verify-coverage.sh
@@ -96,16 +100,22 @@ jobs:
           RACE_RESULT: ${{ needs.race.result }}
           FUZZ_RESULT: ${{ needs.fuzz-seeds.result }}
           INTEGRATION_RESULT: ${{ needs.integration.result }}
+          UNIT_COVERAGE: ${{ needs.unit.outputs.coverage }}
+          MINIMUM_COVERAGE: ${{ needs.unit.outputs.minimum_coverage }}
         run: |
+          coverage="${UNIT_COVERAGE:-not available}"
+          if [[ -n "${UNIT_COVERAGE:-}" ]]; then
+            coverage="${UNIT_COVERAGE}%"
+          fi
           {
             echo '## Test Overview'
             echo
-            echo '| Test suite | Result |'
-            echo '| --- | --- |'
-            echo "| Unit tests and coverage | $UNIT_RESULT |"
-            echo "| Race tests (all packages) | $RACE_RESULT |"
-            echo "| Fuzz seed corpus | $FUZZ_RESULT |"
-            echo "| Container integration tests | $INTEGRATION_RESULT |"
+            echo '| Test suite | Result | Coverage |'
+            echo '| --- | --- | --- |'
+            echo "| Unit tests | $UNIT_RESULT | $coverage (minimum: ${MINIMUM_COVERAGE:-65.0}%) |"
+            echo "| Race tests (all packages) | $RACE_RESULT | — |"
+            echo "| Fuzz seed corpus | $FUZZ_RESULT | — |"
+            echo "| Container integration tests | $INTEGRATION_RESULT | — |"
             echo
             printf 'Coverage profile: download artifact go-common-coverage-%s.\n' "$GITHUB_SHA"
           } >> "$GITHUB_STEP_SUMMARY"
