@@ -5,12 +5,13 @@ package kafka
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"os"
 	"os/exec"
 	"testing"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/go-connections/nat"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -63,10 +64,10 @@ func setupKafkaContainer(ctx context.Context) ([]string, func(), error) {
 		},
 		ExposedPorts: []string{internalPort + "/tcp"},
 		HostConfigModifier: func(hostConfig *container.HostConfig) {
-			hostConfig.PortBindings = nat.PortMap{
-				nat.Port(internalPort + "/tcp"): []nat.PortBinding{
+			hostConfig.PortBindings = network.PortMap{
+				network.MustParsePort(internalPort + "/tcp"): []network.PortBinding{
 					{
-						HostIP:   "0.0.0.0",
+						HostIP:   netip.IPv4Unspecified(),
 						HostPort: mappedPort,
 					},
 				},

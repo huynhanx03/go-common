@@ -7,36 +7,33 @@ import (
 	"time"
 
 	"github.com/huynhanx03/go-common/pkg/common/cache"
+	"github.com/huynhanx03/go-common/pkg/hash"
 	"github.com/huynhanx03/go-common/pkg/unique"
 )
 
-const (
-	generationTTL       = 24 * time.Hour
-	fenceStripeCount    = 256
-	generationKeyPrefix = "__cache_generation__:"
-)
-
-func generationKey(key string) string { return generationKeyPrefix + key }
-
 func (c *Cache[K, V]) lockFence(key string) func() {
-	mu := &c.fenceMu[hashKey(key)%fenceStripeCount]
+	mu := &c.fenceMu[hash.Sum64(key)%fenceStripeCount]
 	mu.Lock()
 	return mu.Unlock
 }
 
-func (c *Cache[K, V]) lockVersion(ctx context.Context, key string) (string, func(), error) {
+func (c *Cache[K, V]) lockVersion(ctx context.Context, key string) (K, func(), error) {
+	var zero K
+	cacheKey, ok := stringCacheKey[K](versionKey(key))
+	if !ok {
+		return zero, nil, cache.ErrInvalidConfig
+	}
 	if err := ctx.Err(); err != nil {
-		return "", nil, err
+		return zero, nil, err
 	}
 	lockToken := c.mu.RLock()
 	if c.closed {
 		c.mu.RUnlock(lockToken)
-		return "", nil, errCacheClosed
+		return zero, nil, errCacheClosed
 	}
 
-	versionKey := generationKey(key)
-	unlockFence := c.lockFence(versionKey)
-	return versionKey, func() {
+	unlockFence := c.lockFence(versionKey(key))
+	return cacheKey, func() {
 		unlockFence()
 		c.mu.RUnlock(lockToken)
 	}, nil
@@ -47,17 +44,17 @@ func (c *Cache[K, V]) SnapshotVersion(ctx context.Context, key string) (string, 
 	if key == "" || len(key) > cache.MaxKeyBytes {
 		return "", cache.ErrInvalidConfig
 	}
-	versionKey, unlock, err := c.lockVersion(ctx, key)
+	cacheKey, unlock, err := c.lockVersion(ctx, key)
 	if err != nil {
 		return "", err
 	}
 	defer unlock()
-	if value, ok := c.inner.Get(hashKey(versionKey)); ok {
+	if value, ok := c.inner.Get(cacheKey); ok {
 		if token, ok := value.(string); ok && token != "" {
 			return token, nil
 		}
 	}
-	return c.writeGeneration(versionKey)
+	return c.writeVersion(cacheKey)
 }
 
 // SetWithVersion stores a value only while the captured fence token is current.
@@ -65,16 +62,20 @@ func (c *Cache[K, V]) SetWithVersion(ctx context.Context, versionKey, storageKey
 	if versionKey == "" || storageKey == "" || token == "" || ttl <= 0 {
 		return cache.ErrInvalidConfig
 	}
-	versionKey, unlock, err := c.lockVersion(ctx, versionKey)
+	storageCacheKey, ok := stringCacheKey[K](storageKey)
+	if !ok {
+		return cache.ErrInvalidConfig
+	}
+	cacheVersionKey, unlock, err := c.lockVersion(ctx, versionKey)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	current, ok := c.inner.Get(hashKey(versionKey))
+	current, ok := c.inner.Get(cacheVersionKey)
 	if !ok || current != token {
 		return nil
 	}
-	return c.writeVersionedValue(hashKey(storageKey), value, ttl)
+	return c.writeVersionedValue(storageCacheKey, value, ttl)
 }
 
 // DeleteValueWithVersion deletes a value only while the captured token is current.
@@ -82,14 +83,18 @@ func (c *Cache[K, V]) DeleteValueWithVersion(ctx context.Context, versionKey, st
 	if versionKey == "" || storageKey == "" || token == "" {
 		return cache.ErrInvalidConfig
 	}
-	versionKey, unlock, err := c.lockVersion(ctx, versionKey)
+	storageCacheKey, ok := stringCacheKey[K](storageKey)
+	if !ok {
+		return cache.ErrInvalidConfig
+	}
+	cacheVersionKey, unlock, err := c.lockVersion(ctx, versionKey)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	current, ok := c.inner.Get(hashKey(versionKey))
+	current, ok := c.inner.Get(cacheVersionKey)
 	if ok && current == token {
-		c.delete(hashKey(storageKey))
+		c.delete(storageCacheKey)
 	}
 	return nil
 }
@@ -99,15 +104,20 @@ func (c *Cache[K, V]) Revoke(ctx context.Context, key string) error {
 	if key == "" || len(key) > cache.MaxKeyBytes {
 		return cache.ErrInvalidConfig
 	}
+	storageKey, ok := stringCacheKey[K](key)
+	if !ok {
+		return cache.ErrInvalidConfig
+	}
+	negativeKey, _ := stringCacheKey[K](key + cache.NegativeKeySuffix)
 	versionKey, unlock, err := c.lockVersion(ctx, key)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	if _, err := c.writeGeneration(versionKey); err != nil {
+	if _, err := c.writeVersion(versionKey); err != nil {
 		return err
 	}
-	c.delete(hashKey(key), hashKey(key+cache.NegativeKeySuffix))
+	c.delete(storageKey, negativeKey)
 	return nil
 }
 
@@ -118,6 +128,9 @@ func (c *Cache[K, V]) RevokeMany(ctx context.Context, keys ...string) error {
 	}
 	for _, key := range keys {
 		if key == "" || len(key) > cache.MaxKeyBytes {
+			return cache.ErrInvalidConfig
+		}
+		if _, ok := stringCacheKey[K](key); !ok {
 			return cache.ErrInvalidConfig
 		}
 	}
@@ -136,19 +149,23 @@ func (c *Cache[K, V]) RevokeMany(ctx context.Context, keys ...string) error {
 			errs = append(errs, err)
 			continue
 		}
-		if !c.inner.SetWithTTL(hashKey(generationKey(key)), token, defaultCost, generationTTL) {
-			errs = append(errs, errGenerationWriteRejected)
+		cacheKey, ok := stringCacheKey[K](versionKey(key))
+		if !ok || !c.inner.SetWithTTL(cacheKey, token, defaultCost, versionTTL) {
+			errs = append(errs, errVersionWriteRejected)
 			continue
 		}
 		deleted = append(deleted, key, key+cache.NegativeKeySuffix)
 	}
 	if len(deleted) > 0 {
 		c.inner.Wait()
-		hashed := make([]uint64, 0, len(deleted))
+		storageKeys := make([]K, 0, len(deleted))
 		for _, key := range deleted {
-			hashed = append(hashed, hashKey(key))
+			storageKey, ok := stringCacheKey[K](key)
+			if ok {
+				storageKeys = append(storageKeys, storageKey)
+			}
 		}
-		c.delete(hashed...)
+		c.delete(storageKeys...)
 	}
 	return errors.Join(errs...)
 }
@@ -166,7 +183,7 @@ func (c *Cache[K, V]) lockFences(ctx context.Context, keys []string) (func(), er
 	stripes := make([]int, 0, len(keys))
 	seen := make(map[int]struct{}, len(keys))
 	for _, key := range keys {
-		stripe := int(hashKey(generationKey(key)) % fenceStripeCount)
+		stripe := int(hash.Sum64(versionKey(key)) % fenceStripeCount)
 		if _, exists := seen[stripe]; exists {
 			continue
 		}
@@ -186,20 +203,26 @@ func (c *Cache[K, V]) lockFences(ctx context.Context, keys []string) (func(), er
 	}, nil
 }
 
-func (c *Cache[K, V]) writeGeneration(key string) (string, error) {
+func (c *Cache[K, V]) writeVersion(key K) (string, error) {
 	token, err := unique.NewToken()
 	if err != nil {
 		return "", err
 	}
-	if !c.write(hashKey(key), token, generationTTL) {
-		return "", errGenerationWriteRejected
+	if !c.inner.SetWithTTL(key, token, defaultCost, versionTTL) {
+		return "", errVersionWriteRejected
 	}
+	c.inner.Wait()
 	return token, nil
 }
 
-func (c *Cache[K, V]) writeVersionedValue(key uint64, value any, ttl time.Duration) error {
+func (c *Cache[K, V]) writeVersionedValue(key K, value any, ttl time.Duration) error {
 	if !c.write(key, value, ttl) {
 		return errConditionalWriteFailed
 	}
 	return nil
+}
+
+func stringCacheKey[K hash.Key](key string) (K, bool) {
+	cacheKey, ok := any(key).(K)
+	return cacheKey, ok
 }

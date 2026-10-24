@@ -6,7 +6,7 @@ import (
 
 	"github.com/huynhanx03/go-common/pkg/common/apperr"
 	"github.com/huynhanx03/go-common/pkg/payment"
-	stripesdk "github.com/stripe/stripe-go/v85"
+	stripesdk "github.com/stripe/stripe-go/v87"
 )
 
 const taxBehaviorInclusive = "inclusive"
@@ -253,7 +253,10 @@ func invoiceTotalTaxRateRef(tax *stripesdk.InvoiceTotalTax) string {
 		return ""
 	}
 
-	return tax.TaxRateDetails.TaxRate
+	if tax.TaxRateDetails.TaxRate == nil {
+		return ""
+	}
+	return tax.TaxRateDetails.TaxRate.ID
 }
 
 func invoiceSubscriptionMetadata(src *stripesdk.Invoice) map[string]string {
@@ -341,8 +344,8 @@ func invoiceLineTaxesToNeutral(src *stripesdk.InvoiceLineItem) []payment.TaxAmou
 		}
 
 		rateRef := ""
-		if tax.TaxRateDetails != nil {
-			rateRef = tax.TaxRateDetails.TaxRate
+		if tax.TaxRateDetails != nil && tax.TaxRateDetails.TaxRate != nil {
+			rateRef = tax.TaxRateDetails.TaxRate.ID
 		}
 
 		out = append(out, payment.TaxAmount{

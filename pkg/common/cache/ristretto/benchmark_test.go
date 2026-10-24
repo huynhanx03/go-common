@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dgraph-io/ristretto"
+	"github.com/dgraph-io/ristretto/v2"
 )
 
 const benchmarkKey = "cache-benchmark-key"
 
-func benchmarkConfig() ristretto.Config {
+func benchmarkConfig() Config {
 	cfg := DefaultConfig()
 	cfg.NumCounters = 1 << 16
 	cfg.MaxCost = 1 << 20
@@ -22,7 +22,7 @@ func benchmarkConfig() ristretto.Config {
 func newBenchmarkCache(b *testing.B) *Cache[string, string] {
 	b.Helper()
 	cfg := benchmarkConfig()
-	c, err := New[string, string](func(target *ristretto.Config) { *target = cfg })
+	c, err := New[string, string](func(target *Config) { *target = cfg })
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -30,10 +30,17 @@ func newBenchmarkCache(b *testing.B) *Cache[string, string] {
 	return c
 }
 
-func newRawBenchmarkCache(b *testing.B) *ristretto.Cache {
+func newRawBenchmarkCache(b *testing.B) *ristretto.Cache[string, any] {
 	b.Helper()
-	cfg := benchmarkConfig()
-	c, err := ristretto.NewCache(&cfg)
+	base := benchmarkConfig()
+	cfg := ristretto.Config[string, any]{
+		NumCounters: base.NumCounters,
+		MaxCost:     base.MaxCost,
+		BufferItems: base.BufferItems,
+		Metrics:     base.Metrics,
+		Cost:        base.Cost,
+	}
+	c, err := ristretto.NewCache[string, any](&cfg)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -78,13 +85,12 @@ func BenchmarkGet(b *testing.B) {
 
 		b.Run(name+"/raw", func(b *testing.B) {
 			c := newRawBenchmarkCache(b)
-			hashedKey := hashKey(key)
 			if hit {
-				if !c.Set(hashedKey, "value", defaultCost) {
+				if !c.Set(key, "value", defaultCost) {
 					b.Fatal("failed to seed cache")
 				}
 				c.Wait()
-				if value, ok := c.Get(hashedKey); !ok || value != "value" {
+				if value, ok := c.Get(key); !ok || value != "value" {
 					b.Fatalf("seeded Get() = %v, %v", value, ok)
 				}
 			}
@@ -95,7 +101,7 @@ func BenchmarkGet(b *testing.B) {
 				var ok, ran bool
 				for pb.Next() {
 					ran = true
-					rawValue, found := c.Get(hashKey(key))
+					rawValue, found := c.Get(key)
 					ok = found
 					if found {
 						value, _ = rawValue.(string)
@@ -130,8 +136,7 @@ func BenchmarkSet(b *testing.B) {
 
 	b.Run("raw", func(b *testing.B) {
 		c := newRawBenchmarkCache(b)
-		hashedKey := hashKey(benchmarkKey)
-		if !c.Set(hashedKey, "initial", defaultCost) {
+		if !c.Set(benchmarkKey, "initial", defaultCost) {
 			b.Fatal("failed to seed cache")
 		}
 		c.Wait()
@@ -140,7 +145,7 @@ func BenchmarkSet(b *testing.B) {
 		b.RunParallel(func(pb *testing.PB) {
 			accepted := true
 			for pb.Next() {
-				accepted = c.Set(hashKey(benchmarkKey), "value", defaultCost)
+				accepted = c.Set(benchmarkKey, "value", defaultCost)
 				c.Wait()
 			}
 			if !accepted {
@@ -174,8 +179,7 @@ func BenchmarkSetWithTTL(b *testing.B) {
 
 	b.Run("raw", func(b *testing.B) {
 		c := newRawBenchmarkCache(b)
-		hashedKey := hashKey(benchmarkKey)
-		if !c.SetWithTTL(hashedKey, "initial", defaultCost, ttl) {
+		if !c.SetWithTTL(benchmarkKey, "initial", defaultCost, ttl) {
 			b.Fatal("failed to seed cache")
 		}
 		c.Wait()
@@ -184,7 +188,7 @@ func BenchmarkSetWithTTL(b *testing.B) {
 		b.RunParallel(func(pb *testing.PB) {
 			accepted := true
 			for pb.Next() {
-				accepted = c.SetWithTTL(hashKey(benchmarkKey), "value", defaultCost, ttl)
+				accepted = c.SetWithTTL(benchmarkKey, "value", defaultCost, ttl)
 				c.Wait()
 			}
 			if !accepted {

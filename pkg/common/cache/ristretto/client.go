@@ -3,7 +3,7 @@ package ristretto
 import (
 	"sync"
 
-	"github.com/dgraph-io/ristretto"
+	"github.com/dgraph-io/ristretto/v2"
 
 	"github.com/huynhanx03/go-common/pkg/common/cache"
 	"github.com/huynhanx03/go-common/pkg/hash"
@@ -23,7 +23,7 @@ type Stats struct {
 
 // Cache wraps Ristretto and implements the shared cache L1 engine.
 type Cache[K hash.Key, V any] struct {
-	inner   *ristretto.Cache
+	inner   *ristretto.Cache[K, any]
 	mu      commonsync.RBMutex
 	fenceMu [fenceStripeCount]sync.Mutex
 	closed  bool
@@ -36,7 +36,15 @@ func New[K hash.Key, V any](opts ...Option) (*Cache[K, V], error) {
 		opt(&cfg)
 	}
 
-	inner, err := ristretto.NewCache(&cfg)
+	innerConfig := ristretto.Config[K, any]{
+		NumCounters: cfg.NumCounters,
+		MaxCost:     cfg.MaxCost,
+		BufferItems: cfg.BufferItems,
+		Metrics:     cfg.Metrics,
+		Cost:        cfg.Cost,
+	}
+
+	inner, err := ristretto.NewCache[K, any](&innerConfig)
 	if err != nil {
 		return nil, err
 	}

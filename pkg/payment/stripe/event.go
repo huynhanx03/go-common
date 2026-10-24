@@ -9,8 +9,8 @@ import (
 	"github.com/huynhanx03/go-common/pkg/common/apperr"
 	"github.com/huynhanx03/go-common/pkg/encoding/json"
 	"github.com/huynhanx03/go-common/pkg/payment"
-	stripesdk "github.com/stripe/stripe-go/v85"
-	"github.com/stripe/stripe-go/v85/webhook"
+	stripesdk "github.com/stripe/stripe-go/v87"
+	"github.com/stripe/stripe-go/v87/webhook"
 )
 
 // VerifyAndDecode authenticates a webhook delivery against the configured

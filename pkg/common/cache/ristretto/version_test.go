@@ -1,6 +1,7 @@
 package ristretto
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -179,18 +180,18 @@ func TestVersionOperationsFailAfterClose(t *testing.T) {
 func TestVersionOperationsReportRistrettoWriteRejection(t *testing.T) {
 	c := newTestCache(t)
 	c.inner.Close()
-	if err := c.writeVersionedValue(hashKey("key"), "value", time.Minute); !errors.Is(err, errConditionalWriteFailed) {
+	if err := c.writeVersionedValue("key", "value", time.Minute); !errors.Is(err, errConditionalWriteFailed) {
 		t.Fatalf("writeVersionedValue() error = %v; want %v", err, errConditionalWriteFailed)
 	}
 	if err := c.Revoke(context.Background(), "key"); err == nil {
-		t.Fatal("Revoke hid generation write rejection")
+		t.Fatal("Revoke hid version write rejection")
 	}
 	if _, err := c.SnapshotVersion(context.Background(), "new-key"); err == nil {
-		t.Fatal("SnapshotVersion hid generation write rejection")
+		t.Fatal("SnapshotVersion hid version write rejection")
 	}
 }
 
-func TestGenerationReportsRandomSourceFailure(t *testing.T) {
+func TestVersionReportsRandomSourceFailure(t *testing.T) {
 	previous := rand.Reader
 	rand.Reader = errorReader{}
 	t.Cleanup(func() { rand.Reader = previous })
@@ -228,11 +229,61 @@ func TestRevokeManyHandlesEmptyInvalidCanceledAndClosedRequests(t *testing.T) {
 	}
 }
 
-func TestRevokeManyReturnsRejectedGenerationWrites(t *testing.T) {
+func TestRevokeManyReturnsRejectedVersionWrites(t *testing.T) {
 	c := newTestCache(t)
 	c.inner.Close()
-	if err := c.RevokeMany(context.Background(), "one", "two"); !errors.Is(err, errGenerationWriteRejected) {
-		t.Fatalf("RevokeMany() error = %v; want generation write rejection", err)
+	if err := c.RevokeMany(context.Background(), "one", "two"); !errors.Is(err, errVersionWriteRejected) {
+		t.Fatalf("RevokeMany() error = %v; want version write rejection", err)
+	}
+}
+
+func TestVersionOperationsRequireStringKeys(t *testing.T) {
+	c, err := New[uint64, any]()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.Close)
+	ctx := context.Background()
+
+	if _, err := c.SnapshotVersion(ctx, "key"); !errors.Is(err, cache.ErrInvalidConfig) {
+		t.Fatalf("SnapshotVersion() error = %v; want invalid config", err)
+	}
+	if err := c.SetWithVersion(ctx, "key", "key", "value", time.Minute, "token"); !errors.Is(err, cache.ErrInvalidConfig) {
+		t.Fatalf("SetWithVersion() error = %v; want invalid config", err)
+	}
+	if err := c.DeleteValueWithVersion(ctx, "key", "key", "token"); !errors.Is(err, cache.ErrInvalidConfig) {
+		t.Fatalf("DeleteValueWithVersion() error = %v; want invalid config", err)
+	}
+	if err := c.Revoke(ctx, "key"); !errors.Is(err, cache.ErrInvalidConfig) {
+		t.Fatalf("Revoke() error = %v; want invalid config", err)
+	}
+	if err := c.RevokeMany(ctx, "key"); !errors.Is(err, cache.ErrInvalidConfig) {
+		t.Fatalf("RevokeMany() error = %v; want invalid config", err)
+	}
+}
+
+func TestRevokeManyDeletesSuccessfulKeysWhenAnotherTokenFails(t *testing.T) {
+	c := newTestCache(t)
+	ctx := context.Background()
+	for _, key := range []string{"first", "second"} {
+		if !c.Set(key, key) {
+			t.Fatalf("Set(%q) failed", key)
+		}
+	}
+
+	previous := rand.Reader
+	rand.Reader = bytes.NewReader(make([]byte, 16))
+	t.Cleanup(func() { rand.Reader = previous })
+
+	err := c.RevokeMany(ctx, "first", "second")
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("RevokeMany() error = %v; want EOF from second token", err)
+	}
+	if _, found := c.Get(ctx, "first"); found {
+		t.Fatal("RevokeMany() left successfully revoked key in the cache")
+	}
+	if value, found := c.Get(ctx, "second"); !found || value != "second" {
+		t.Fatalf("RevokeMany() changed key whose token generation failed: %v, %v", value, found)
 	}
 }
 

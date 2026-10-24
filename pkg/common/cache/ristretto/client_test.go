@@ -59,3 +59,15 @@ func TestStats(t *testing.T) {
 		t.Errorf("Stats = %+v, want hits/misses/keycount >= 1", s)
 	}
 }
+
+func TestStatsWhenMetricsAreDisabled(t *testing.T) {
+	c, err := New[string, any](WithMetrics(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.Close)
+
+	if stats := c.Stats(); stats != (Stats{}) {
+		t.Fatalf("Stats() with metrics disabled = %+v; want zero", stats)
+	}
+}
