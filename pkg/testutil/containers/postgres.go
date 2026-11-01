@@ -14,8 +14,6 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-const PostgresImage = "postgres:17-alpine"
-
 // StartPostgres starts an isolated PostgreSQL container for an integration
 // test and terminates it during cleanup. The returned DSN is local to the test.
 func StartPostgres(t testing.TB) string {
