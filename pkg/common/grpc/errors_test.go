@@ -11,7 +11,9 @@ import (
 
 	"github.com/huynhanx03/go-common/pkg/common/apperr"
 	commongrpc "github.com/huynhanx03/go-common/pkg/common/grpc"
+	"github.com/huynhanx03/go-common/pkg/security"
 	"github.com/huynhanx03/go-common/pkg/security/authentication"
+	"github.com/huynhanx03/go-common/pkg/security/authorization"
 )
 
 func TestStatusErrorMapsTypedFailuresWithoutLeakingCauses(t *testing.T) {
@@ -25,6 +27,12 @@ func TestStatusErrorMapsTypedFailuresWithoutLeakingCauses(t *testing.T) {
 		{name: "canceled", err: context.Canceled, code: codes.Canceled},
 		{name: "deadline", err: context.DeadlineExceeded, code: codes.DeadlineExceeded},
 		{name: "authentication", err: authentication.ErrInvalidToken, code: codes.Unauthenticated},
+		{name: "checker authentication", err: errors.Join(security.ErrUnauthenticated, status.Error(codes.Internal, "token=secret")), code: codes.Unauthenticated},
+		{name: "checker forbidden", err: security.ErrForbidden, code: codes.PermissionDenied},
+		{name: "checker configuration", err: security.ErrInvalidConfiguration, code: codes.Internal},
+		{name: "checker invalid permission", err: errors.Join(security.ErrInvalidRequest, authorization.ErrInvalidRequest), code: codes.Internal},
+		{name: "evaluator error wraps denial", err: errors.Join(authorization.ErrEvaluation, security.ErrForbidden), code: codes.Internal},
+		{name: "evaluator error wraps status", err: errors.Join(authorization.ErrEvaluation, status.Error(codes.Internal, "token=secret")), code: codes.Internal},
 		{name: "invalid argument", err: apperr.New(apperr.CodeParamInvalid, "unsafe detail", errors.New("token=secret")), code: codes.InvalidArgument},
 		{name: "account not found", err: apperr.New(apperr.CodeAccountNotFound, "unsafe detail", nil), code: codes.NotFound},
 		{name: "forbidden", err: apperr.New(apperr.CodeForbidden, "unsafe detail", nil), code: codes.PermissionDenied},

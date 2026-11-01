@@ -1,5 +1,5 @@
-// Package authentication defines vendor-neutral authenticated principals and
-// token issue/verification contracts.
+// Package authentication provides authenticated principals and RS256 JWT
+// issuance and verification.
 package authentication
 
 import (
@@ -15,12 +15,9 @@ type Principal struct {
 	SessionID     string
 	Username      string
 	TokenID       string
-	// AuthenticatedAt is the last primary or step-up authentication time
-	// asserted by the verified credential. Session-aware applications must
-	// still re-check their canonical server-side session state.
+	// AuthenticatedAt is the token's asserted primary or step-up authentication time.
 	AuthenticatedAt time.Time
-	// SecurityVersion is an application-owned monotonic session/account
-	// version. Zero means the issuing application does not use version fences.
+	// SecurityVersion is the application's session/account version; zero disables it.
 	SecurityVersion    uint64
 	AuthenticatedUntil time.Time
 }
@@ -30,46 +27,33 @@ func Anonymous() Principal {
 }
 
 func (p Principal) Validate(now time.Time) error {
-	if !p.Authenticated {
-		if p.Subject != "" ||
-			p.UserID != "" ||
-			p.SessionID != "" ||
-			p.Username != "" ||
-			p.TokenID != "" ||
-			!p.AuthenticatedAt.IsZero() ||
-			p.SecurityVersion != 0 ||
-			!p.AuthenticatedUntil.IsZero() {
-			return fmt.Errorf("%w: anonymous principal contains identity", ErrInvalidPrincipal)
+	if p.Authenticated {
+		if p.Subject == "" {
+			return fmt.Errorf("%w: authenticated subject is empty", ErrInvalidPrincipal)
+		}
+		if p.AuthenticatedUntil.IsZero() || !p.AuthenticatedUntil.After(now) {
+			return fmt.Errorf("%w: authentication boundary is not in the future", ErrInvalidPrincipal)
 		}
 		return nil
 	}
-	if p.Subject == "" {
-		return fmt.Errorf("%w: authenticated subject is empty", ErrInvalidPrincipal)
-	}
-	if p.AuthenticatedUntil.IsZero() || !p.AuthenticatedUntil.After(now) {
-		return fmt.Errorf("%w: authentication boundary is not in the future", ErrInvalidPrincipal)
+	if p.Subject != "" || p.UserID != "" || p.SessionID != "" ||
+		p.Username != "" || p.TokenID != "" ||
+		!p.AuthenticatedAt.IsZero() || p.SecurityVersion != 0 ||
+		!p.AuthenticatedUntil.IsZero() {
+		return fmt.Errorf("%w: anonymous principal contains identity", ErrInvalidPrincipal)
 	}
 	return nil
 }
 
-// RecentlyAuthenticated reports whether an otherwise valid authenticated
-// principal carries a primary/step-up authentication time within maximumAge.
-// It rejects future assertions instead of hiding clock or issuer defects.
-//
-// This is a credential-level primitive. Session-aware applications must call
-// it only after reconciling the principal with their canonical live session;
-// a token assertion alone cannot prove that a session was not revoked.
+// RecentlyAuthenticated checks that the asserted authentication age is within
+// [0, maximumAge]. Applications must check live session state separately.
 func (p Principal) RecentlyAuthenticated(now time.Time, maximumAge time.Duration) bool {
 	if now.IsZero() || maximumAge <= 0 || p.Validate(now) != nil ||
 		!p.Authenticated || p.AuthenticatedAt.IsZero() {
 		return false
 	}
-	now = now.UTC()
-	authenticatedAt := p.AuthenticatedAt.UTC()
-	if authenticatedAt.After(now) {
-		return false
-	}
-	return now.Sub(authenticatedAt) <= maximumAge
+	age := now.Sub(p.AuthenticatedAt)
+	return age >= 0 && age <= maximumAge
 }
 
 type principalContextKey struct{}

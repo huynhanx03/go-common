@@ -114,3 +114,20 @@ func TestForEach(t *testing.T) {
 		t.Errorf("sum = %d, want 60", sum)
 	}
 }
+
+func TestForEachObjectCanStopEarly(t *testing.T) {
+	data := []byte(`{"items":{"first":1,"second":2}}`)
+	calls := 0
+
+	ForEach(data, "items", func(key string, value []byte) bool {
+		calls++
+		if key == "" || !Valid(value) {
+			t.Fatalf("callback received key %q and value %q", key, value)
+		}
+		return false
+	})
+
+	if calls != 1 {
+		t.Fatalf("callback calls = %d, want 1 after stopping", calls)
+	}
+}

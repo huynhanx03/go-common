@@ -3,8 +3,8 @@
 `pkg/toggle` provides a reusable feature-flag management contract. It uses the
 official Unleash Go SDK for local evaluation and includes an Ent/PostgreSQL
 Store. There is no Unleash Server to operate: each service owns its database,
-Ent client, migrations, authorization and eventual UI. `pkg/toggle/httpapi`
-provides an optional CRUD handler that services mount in their admin API.
+Ent client, migrations, authorization and eventual UI. `pkg/toggle/gin`
+provides optional CRUD routes that services mount in their admin API.
 
 Add the package to a service with:
 
@@ -128,25 +128,28 @@ missing key returns `ErrNotFound` without advancing the revision.
 
 ## Connect the management API and authorization
 
-`pkg/toggle/httpapi` exposes CRUD endpoints over a `Manager`. It requires an
-`Authorizer`, so callers cannot construct the handler without providing a
-scope authorization decision. Authentication middleware should put the
-service's principal in the request context; the authorizer then checks whether
-that principal may manage the requested namespace and environment.
+`pkg/toggle/gin` exposes CRUD routes over a `Manager`. The service owns its Gin
+router and middleware; the handler requires an `Authorizer` for the requested
+namespace and environment. Authentication middleware should put the service's
+principal in the request context before the authorizer runs.
+The handler owns small HTTP request/response DTOs; `Manager` already contains
+the validation and management logic, so a second service wrapper is unnecessary.
+Import the handler as `togglegin` from
+`github.com/huynhanx03/go-common/pkg/toggle/gin`.
 
 ```go
-management, err := httpapi.New(manager, httpapi.AuthorizerFunc(
+management, err := togglegin.New(manager, togglegin.AuthorizerFunc(
 	func(ctx context.Context, scope toggle.Scope) error {
 		principal, ok := auth.PrincipalFromContext(ctx)
 		if !ok {
-			return httpapi.ErrUnauthenticated
+			return togglegin.ErrUnauthenticated
 		}
 		allowed, err := policy.CanManageFeatureFlags(ctx, principal, scope)
 		if err != nil {
 			return err // The handler fails closed with 500; do not hide policy outages.
 		}
 		if !allowed {
-			return httpapi.ErrForbidden
+			return togglegin.ErrForbidden
 		}
 		return nil
 	},
@@ -155,7 +158,9 @@ if err != nil {
 	return err
 }
 
-adminMux.Handle("/admin/", authMiddleware(http.StripPrefix("/admin", management)))
+admin := router.Group("/admin")
+admin.Use(authMiddleware)
+management.RegisterRoutes(admin)
 ```
 
 The principal, middleware and policy calls are service-owned examples: replace
@@ -168,7 +173,7 @@ The routes are:
 | --- | --- | --- |
 | `GET` | `/v1/toggles/{namespace}/{environment}` | Return the complete snapshot and its `ETag` revision. |
 | `GET` | `/v1/toggles/{namespace}/{environment}/{key}` | Return one flag and its scope `ETag` revision. |
-| `PUT` | `/v1/toggles/{namespace}/{environment}/{key}` | Replace a flag; body is a `toggle.Flag`, and `key` must match the path. |
+| `PUT` | `/v1/toggles/{namespace}/{environment}/{key}` | Replace a flag; request DTO `key` must match the path. |
 | `DELETE` | `/v1/toggles/{namespace}/{environment}/{key}` | Delete a flag. |
 
 `PUT` and `DELETE` require `If-Match: "<revision>"`, copied from the last

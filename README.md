@@ -33,7 +33,7 @@ architecture:
 | Security | `pkg/security/authentication`, `pkg/security/authorization`, `pkg/security/password`, `pkg/oauth` |
 | Transports | `pkg/common/http/...`, `pkg/common/grpc/...`, `pkg/common/websocket` |
 | Data boundaries | `pkg/common/tx`, `pkg/database/...`, `pkg/cdc` |
-| Feature flags | `pkg/toggle`, `pkg/toggle/httpapi`, `pkg/toggle/unleash`, `pkg/toggle/ent` |
+| Feature flags | `pkg/toggle`, `pkg/toggle/gin`, `pkg/toggle/unleash`, `pkg/toggle/ent` |
 | Messaging | `pkg/mq/forge`, `pkg/mq/outbox`, `pkg/mq/batcher`, `pkg/mq/kafka` |
 | Reusable core | `pkg/bytes`, `pkg/stream`, `pkg/encoding/...`, `pkg/dto`, `pkg/unique`, `pkg/datastructs/...`, `pkg/pool/...`, `pkg/consistenthash` |
 

@@ -5,27 +5,46 @@ import (
 	"errors"
 	"sync/atomic"
 
+	casbinlib "github.com/casbin/casbin/v3"
 	"github.com/huynhanx03/go-common/pkg/security/authorization"
 )
 
+type liveSnapshot struct {
+	revision          int64
+	requestArity      int
+	enforcer          *casbinlib.Enforcer
+	groupRelations    *relationRoleManager
+	resourceRelations *relationRoleManager
+}
+
+type runtimeNonce struct {
+	marker byte
+}
+
+type PreparedSnapshot struct {
+	owner    *runtimeNonce
+	snapshot *liveSnapshot
+	used     atomic.Bool
+}
+
 type Runtime struct {
-	live    atomic.Pointer[liveSnapshot]
-	desired atomic.Int64
-	nonce   *runtimeNonce
-	options runtimeOptions
+	live            atomic.Pointer[liveSnapshot]
+	desired         atomic.Int64
+	subjectSequence atomic.Uint64
+	nonce           *runtimeNonce
+	options         runtimeOptions
 }
 
 func NewRuntime(initial Snapshot, optionFunctions ...Option) (*Runtime, error) {
-	options := defaultRuntimeOptions()
-	for _, option := range optionFunctions {
-		if option == nil {
-			return nil, ErrInvalidOption
-		}
-		if err := option(&options); err != nil {
-			return nil, err
-		}
+	options, err := configuredRuntimeOptions(optionFunctions...)
+	if err != nil {
+		return nil, err
 	}
-	live, err := prepareLiveSnapshot(context.Background(), initial, options.limits)
+	return newRuntime(context.Background(), initial, options)
+}
+
+func newRuntime(ctx context.Context, initial Snapshot, options runtimeOptions) (*Runtime, error) {
+	live, err := prepareLiveSnapshot(ctx, initial, options.limits)
 	if err != nil {
 		return nil, err
 	}
@@ -84,6 +103,14 @@ func (r *Runtime) Authorize(
 	ctx context.Context,
 	request authorization.Request,
 ) (authorization.Decision, error) {
+	return r.authorize(ctx, request, "")
+}
+
+func (r *Runtime) authorize(
+	ctx context.Context,
+	request authorization.Request,
+	subjectOverride string,
+) (authorization.Decision, error) {
 	live := r.current()
 	revision := int64(0)
 	if live != nil {
@@ -116,6 +143,11 @@ func (r *Runtime) Authorize(
 			revision,
 		), authorization.ErrEvaluation
 	}
+	if live.requestArity >= 4 {
+		if err := request.Scope.Validate(); err != nil {
+			return denied(authorization.ReasonInvalidRequest, revision), authorization.ErrInvalidRequest
+		}
+	}
 	if !r.snapshotIsCurrent(live) {
 		return denied(
 			authorization.ReasonEvaluationError,
@@ -123,9 +155,7 @@ func (r *Runtime) Authorize(
 		), errors.Join(authorization.ErrEvaluation, ErrUnhealthy)
 	}
 	allowed, err := live.enforcer.Enforce(
-		request.Principal.Subject,
-		request.Resource,
-		request.Action,
+		authorizationArguments(live, request, subjectOverride)...,
 	)
 	if err != nil {
 		return denied(
@@ -156,6 +186,31 @@ func (r *Runtime) Authorize(
 		Reason:   authorization.ReasonAllowed,
 		Revision: revision,
 	}, nil
+}
+
+func authorizationArguments(live *liveSnapshot, request authorization.Request, subjectOverride string) []any {
+	subject := request.Principal.Subject
+	if subjectOverride != "" {
+		subject = subjectOverride
+	}
+	if live.requestArity == 5 {
+		return []any{
+			subject,
+			request.Scope.Key(),
+			request.Resource,
+			request.ResourceID,
+			request.Action,
+		}
+	}
+	if live.requestArity == 4 {
+		return []any{
+			subject,
+			request.Scope.Key(),
+			request.Resource,
+			request.Action,
+		}
+	}
+	return []any{subject, request.Resource, request.Action}
 }
 
 func (r *Runtime) snapshotIsCurrent(snapshot *liveSnapshot) bool {

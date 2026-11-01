@@ -7,8 +7,6 @@ A Gin-based HTTP toolkit providing middlewares, request/response helpers, valida
 ```
 pkg/common/http/
 ├── middlewares/          # Gin middleware chain
-│   ├── auth.go           # JWT authentication (RSA)
-│   ├── permission.go     # RBAC permission & role level checks
 │   ├── rate_limit.go     # Per-key token bucket rate limiting
 │   ├── circuit_breaker.go# Circuit breaker (503 on open)
 │   ├── cors.go           # CORS headers
@@ -35,30 +33,9 @@ pkg/common/http/
 
 ## Middlewares
 
-### Authentication
-
-JWT validation with RSA signing. Extracts `UserID` and `Username` into request context.
-
-```go
-r.Use(middlewares.Authentication(rsaPublicKey))
-
-// Access in handler:
-userID := ctx.Value(constraints.ContextKeyUserID).(int)
-```
-
-### Permission Checker
-
-RBAC with nested-set role hierarchy. Cached via Ember local cache.
-
-```go
-pc := middlewares.NewPermissionChecker(userRepo, roleRepo, permRepo, localCache)
-
-// Require specific permission scope on a resource
-r.POST("/users", pc.RequirePermission("users", permissions.ScopeWrite))
-
-// Require minimum role level (lower = more privileged)
-r.DELETE("/admin", pc.RequireRole(0)) // admin only
-```
+Authentication and authorization belong to application code. Call
+[`security.Checker`](../../security/README.md) with the extracted token and
+resolved permissions, then map its result to your HTTP response.
 
 ### Rate Limiting
 
@@ -123,7 +100,6 @@ Chain multiple middlewares into a single handler or compose them for route regis
 ```go
 // Wrap a final handler with middlewares
 r.GET("/admin", middlewares.Compose(
-    middlewares.Authentication(key),
     middlewares.RateLimit(cfg),
     middlewares.CircuitBreakerMiddleware(cb),
 )(adminHandler))
@@ -131,7 +107,6 @@ r.GET("/admin", middlewares.Compose(
 // Or pass as handler slice
 r.GET("/path", middlewares.ComposeHandlers(
     middlewares.RateLimit(cfg),
-    middlewares.Authentication(key),
     myHandler,
 )...)
 ```

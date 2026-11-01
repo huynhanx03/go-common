@@ -7,8 +7,6 @@ import (
 	"strings"
 )
 
-const argon2Version = 19
-
 type phcHash struct {
 	memoryKiB   uint32
 	iterations  uint32
@@ -37,7 +35,7 @@ func parsePHC(encoded string, policy Policy) (phcHash, error) {
 	if len(parts) != 6 || parts[0] != "" || parts[1] != "argon2id" {
 		return phcHash{}, fmt.Errorf("%w: invalid Argon2id PHC structure", ErrMalformedHash)
 	}
-	if parts[2] != "v=19" {
+	if parts[2] != argon2VersionPHC {
 		return phcHash{}, fmt.Errorf("%w: unsupported Argon2 version", ErrMalformedHash)
 	}
 

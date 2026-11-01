@@ -54,9 +54,9 @@ func TestOptionsAndLimits(t *testing.T) {
 	}
 	for _, limits := range []Limits{
 		{},
-		{MaxModelBytes: hardMaxModelBytes + 1, MaxRules: 1, MaxValueBytes: 1},
-		{MaxModelBytes: 1, MaxRules: hardMaxRules + 1, MaxValueBytes: 1},
-		{MaxModelBytes: 1, MaxRules: 1, MaxValueBytes: hardMaxValueBytes + 1},
+		{MaxModelBytes: maxModelBytes + 1, MaxRules: 1, MaxValueBytes: 1},
+		{MaxModelBytes: 1, MaxRules: maxRules + 1, MaxValueBytes: 1},
+		{MaxModelBytes: 1, MaxRules: 1, MaxValueBytes: maxValueBytes + 1},
 	} {
 		if _, err := NewRuntime(
 			internalSnapshot(1),
@@ -199,6 +199,13 @@ func TestNilRuntimeAndContextFailClosed(t *testing.T) {
 		decision.Reason != authorization.ReasonEvaluationError {
 		t.Fatalf("Authorize(cancelled) = %#v, %v", decision, err)
 	}
+
+	uninitialized := &Runtime{options: defaultRuntimeOptions()}
+	decision, err = uninitialized.Authorize(context.Background(), internalRequest("read"))
+	if !errors.Is(err, authorization.ErrEvaluation) || decision.Allowed ||
+		decision.Reason != authorization.ReasonEvaluationError {
+		t.Fatalf("Authorize(uninitialized runtime) = %#v, %v", decision, err)
+	}
 }
 
 func TestPolicyAndModelValidationBranches(t *testing.T) {
@@ -240,6 +247,13 @@ func TestPolicyAndModelValidationBranches(t *testing.T) {
 			Revision: 1,
 			Model:    internalRBACModel,
 			Rules: []PolicyRule{
+				{Type: "p", V0: "ro\nle", V1: "document", V2: "read"},
+			},
+		},
+		{
+			Revision: 1,
+			Model:    internalRBACModel,
+			Rules: []PolicyRule{
 				{Type: "p", V0: strings.Repeat("x", defaultMaxValueBytes+1), V1: "document", V2: "read"},
 			},
 		},
@@ -262,6 +276,76 @@ e = some(where (p.eft == allow))
 [matchers]
 m = true
 `,
+		},
+		{
+			Revision: 1,
+			Model: strings.Replace(internalRBACModel,
+				"[request_definition]\nr = sub, obj, act\n", "", 1),
+		},
+		{
+			Revision: 1,
+			Model: strings.Replace(internalRBACModel,
+				"[policy_definition]\np = sub, obj, act\n", "", 1),
+		},
+		{
+			Revision: 1,
+			Model: strings.Replace(internalRBACModel,
+				"r = sub, obj, act", "r2 = sub, obj, act", 1),
+		},
+		{
+			Revision: 1,
+			Model: strings.Replace(internalRBACModel,
+				"r = sub, obj, act", "r = sub, obj", 1),
+		},
+		{
+			Revision: 1,
+			Model: strings.Replace(internalRBACModel,
+				"g = _, _", "g = v0, v1, v2, v3, v4, v5, v6", 1),
+		},
+		{
+			Revision: 1,
+			Model: strings.Replace(internalRBACModel,
+				"[role_definition]\ng = _, _\n", "", 1),
+			Rules: []PolicyRule{{Type: "g", V0: "user", V1: "role"}},
+		},
+		{
+			Revision: 1,
+			Model: strings.Replace(internalRBACModel,
+				"p = sub, obj, act", "p = sub, obj, act, extra, extra2, extra3, extra4", 1),
+		},
+		{
+			Revision: 1,
+			Model: strings.Replace(internalRBACModel,
+				"g = _, _", "g = user, role", 1),
+			Rules: []PolicyRule{{Type: "g", V0: "user", V1: "role"}},
+		},
+		{
+			Revision: 1,
+			Model:    DefaultModel(),
+			Rules: []PolicyRule{
+				{Type: "g3", V0: "scope:a", V1: "scope:a"},
+			},
+		},
+		{
+			Revision: 1,
+			Model:    DefaultModel(),
+			Rules: []PolicyRule{
+				{Type: "g3", V0: "scope:a", V1: "scope:b"},
+				{Type: "g3", V0: "scope:a", V1: "scope:b"},
+			},
+		},
+		{
+			Revision: 1,
+			Model:    DefaultModel(),
+			Rules: []PolicyRule{
+				{Type: "g3", V0: "scope:a", V1: "scope:b"},
+				{Type: "g3", V0: "scope:b", V1: "scope:a"},
+			},
+		},
+		{
+			Revision: 1,
+			Model:    internalRBACModel,
+			Rules:    []PolicyRule{{Type: "p2", V0: "role", V1: "document", V2: "read"}},
 		},
 	}
 	for index, candidate := range tests {
@@ -286,6 +370,91 @@ m = true
 	); !errors.Is(err, ErrInvalidSnapshot) {
 		t.Fatalf("nil context error = %v", err)
 	}
+
+	runtime, err := NewRuntime(valid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelDuringRuleLoad := &cancelOnErrorCheck{Context: context.Background(), cancelAt: 3}
+	if _, err := runtime.Prepare(cancelDuringRuleLoad, internalSnapshot(2)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Prepare(cancel during rule load) error = %v", err)
+	}
+	cancelAfterBuild := &cancelOnErrorCheck{Context: context.Background(), cancelAt: 2}
+	if _, err := runtime.Prepare(cancelAfterBuild, Snapshot{Revision: 2, Model: internalRBACModel}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Prepare(cancel after role links) error = %v", err)
+	}
+}
+
+func TestScopeHierarchyRejectsMalformedAndOverDepthPolicyGraphs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		rules []PolicyRule
+	}{
+		{name: "missing child", rules: []PolicyRule{{Type: "g3", V1: "scope:parent"}}},
+		{name: "missing parent", rules: []PolicyRule{{Type: "g3", V0: "scope:child"}}},
+		{name: "unexpected policy field", rules: []PolicyRule{{Type: "g3", V0: "scope:child", V1: "scope:parent", V2: "extra"}}},
+		{name: "hierarchy exceeds depth limit", rules: deepScopeHierarchy(DefaultMaxScopeHierarchyDepth + 1)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := NewRuntime(Snapshot{Revision: 1, Model: DefaultModel(), Rules: test.rules})
+			if !errors.Is(err, ErrInvalidSnapshot) {
+				t.Fatalf("NewRuntime() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestSnapshotFenceRejectsUnpublishedSnapshots(t *testing.T) {
+	t.Parallel()
+
+	runtime, err := NewRuntime(internalSnapshot(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := runtime.current()
+	if !runtime.snapshotIsCurrent(current) {
+		t.Fatal("snapshotIsCurrent(current) = false")
+	}
+	if runtime.snapshotIsCurrent(nil) {
+		t.Fatal("snapshotIsCurrent(nil) = true")
+	}
+	if runtime.snapshotIsCurrent(&liveSnapshot{revision: 1}) {
+		t.Fatal("snapshotIsCurrent(foreign snapshot) = true")
+	}
+	runtime.SetDesiredRevision(2)
+	if runtime.snapshotIsCurrent(current) {
+		t.Fatal("snapshotIsCurrent(stale revision) = true")
+	}
+}
+
+func deepScopeHierarchy(depth int) []PolicyRule {
+	rules := make([]PolicyRule, 0, depth)
+	for index := 0; index < depth; index++ {
+		rules = append(rules, PolicyRule{
+			Type: "g3",
+			V0:   fmt.Sprintf("scope:%d", index),
+			V1:   fmt.Sprintf("scope:%d", index+1),
+		})
+	}
+	return rules
+}
+
+type cancelOnErrorCheck struct {
+	context.Context
+	cancelAt int
+	checks   int
+}
+
+func (ctx *cancelOnErrorCheck) Err() error {
+	ctx.checks++
+	if ctx.checks >= ctx.cancelAt {
+		return context.Canceled
+	}
+	return nil
 }
 
 func internalSnapshot(revision int64) Snapshot {

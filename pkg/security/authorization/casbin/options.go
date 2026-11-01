@@ -4,19 +4,6 @@ import (
 	"time"
 )
 
-const (
-	// DefaultMaxRoleHierarchyDepth is Casbin's maximum number of relationship
-	// edges followed by the built-in role manager. Exporting the contract lets
-	// applications validate projections without depending on Casbin internals.
-	DefaultMaxRoleHierarchyDepth = 10
-	defaultMaxModelBytes         = 128 << 10
-	hardMaxModelBytes            = 1 << 20
-	defaultMaxRules              = 100_000
-	hardMaxRules                 = 1_000_000
-	defaultMaxValueBytes         = 512
-	hardMaxValueBytes            = 4096
-)
-
 type Limits struct {
 	MaxModelBytes int
 	MaxRules      int
@@ -43,11 +30,11 @@ func WithClock(clock func() time.Time) Option {
 func WithLimits(limits Limits) Option {
 	return func(options *runtimeOptions) error {
 		if limits.MaxModelBytes <= 0 ||
-			limits.MaxModelBytes > hardMaxModelBytes ||
+			limits.MaxModelBytes > maxModelBytes ||
 			limits.MaxRules <= 0 ||
-			limits.MaxRules > hardMaxRules ||
+			limits.MaxRules > maxRules ||
 			limits.MaxValueBytes <= 0 ||
-			limits.MaxValueBytes > hardMaxValueBytes {
+			limits.MaxValueBytes > maxValueBytes {
 			return ErrInvalidOption
 		}
 		options.limits = limits
@@ -64,4 +51,17 @@ func defaultRuntimeOptions() runtimeOptions {
 			MaxValueBytes: defaultMaxValueBytes,
 		},
 	}
+}
+
+func configuredRuntimeOptions(optionFunctions ...Option) (runtimeOptions, error) {
+	options := defaultRuntimeOptions()
+	for _, option := range optionFunctions {
+		if option == nil {
+			return runtimeOptions{}, ErrInvalidOption
+		}
+		if err := option(&options); err != nil {
+			return runtimeOptions{}, err
+		}
+	}
+	return options, nil
 }

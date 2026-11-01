@@ -43,15 +43,16 @@ func RecoveryMiddleware(log *logger.Logger) gin.HandlerFunc {
 					return
 				}
 				if !c.Writer.Written() {
-					response.ErrorResponse(c, apperr.CodeInternalServer, apperr.New(
-						apperr.CodeInternalServer,
-						"internal server error",
-						nil,
-					))
+					internalServerError(c)
 				}
 				c.Abort()
 			}
 		}()
 		c.Next()
 	}
+}
+
+func internalServerError(c *gin.Context) {
+	response.ErrorResponse(c, apperr.CodeInternalServer, apperr.New(apperr.CodeInternalServer, "internal server error", nil))
+	c.Abort()
 }

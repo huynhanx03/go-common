@@ -2,18 +2,8 @@ package password
 
 import (
 	"fmt"
-	"math"
-)
 
-const (
-	hardMaxMemoryKiB     = uint32(1024 * 1024)
-	hardMaxIterations    = uint32(10)
-	hardMaxParallelism   = uint8(16)
-	hardMaxSaltBytes     = uint32(64)
-	hardMaxKeyBytes      = uint32(64)
-	hardMaxPasswordBytes = 1 << 20
-	hardMaxPHCBytes      = 4 << 10
-	hardMaxConcurrent    = 1024
+	"github.com/huynhanx03/go-common/pkg/settings"
 )
 
 type Policy struct {
@@ -29,14 +19,24 @@ type Policy struct {
 
 func DefaultPolicy() Policy {
 	return Policy{
-		MemoryKiB:        64 * 1024,
-		Iterations:       3,
-		Parallelism:      2,
-		SaltBytes:        16,
-		KeyBytes:         32,
-		MaxPasswordBytes: 1024,
-		MaxPHCBytes:      512,
-		MaxConcurrent:    2,
+		MemoryKiB:        defaultMemoryKiB,
+		Iterations:       defaultIterations,
+		Parallelism:      defaultParallelism,
+		SaltBytes:        defaultSaltBytes,
+		KeyBytes:         defaultKeyBytes,
+		MaxPasswordBytes: defaultMaxPasswordBytes,
+		MaxPHCBytes:      defaultMaxPHCBytes,
+		MaxConcurrent:    defaultMaxConcurrent,
+	}
+}
+
+func DefaultPassword() settings.Password {
+	policy := DefaultPolicy()
+	return settings.Password{
+		MemoryKiB:     policy.MemoryKiB,
+		Iterations:    policy.Iterations,
+		Parallelism:   policy.Parallelism,
+		MaxConcurrent: policy.MaxConcurrent,
 	}
 }
 
@@ -60,11 +60,6 @@ func (p Policy) validate() error {
 		return invalidPolicy("maximum PHC length is outside the supported range")
 	case p.MaxConcurrent <= 0 || p.MaxConcurrent > hardMaxConcurrent:
 		return invalidPolicy("maximum concurrency is outside the supported range")
-	case uint64(p.MemoryKiB)*1024 > uint64(math.MaxInt):
-		return invalidPolicy("memory size overflows this platform")
-	case uint64(p.SaltBytes) > uint64(math.MaxInt),
-		uint64(p.KeyBytes) > uint64(math.MaxInt):
-		return invalidPolicy("encoded length overflows this platform")
 	default:
 		return nil
 	}

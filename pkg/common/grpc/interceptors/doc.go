@@ -8,8 +8,8 @@
 //		interceptors.UnaryRequestIDServer(grpccommon.DefaultRequestIDOptions()),
 //		interceptors.UnaryLoggingServer(log),
 //		interceptors.UnaryRecoveryServer(log),
-//		interceptors.UnaryAuthenticationServer(verifier, source),
-//		interceptors.UnaryAuthorizationServer(authorizer, resolve),
+//		interceptors.UnaryAuthenticationServer(checker, source),
+//		interceptors.UnaryAuthorizationServer(checker, resolve),
 //	)
 //
 // Raw credentials, request messages, response messages, and returned error

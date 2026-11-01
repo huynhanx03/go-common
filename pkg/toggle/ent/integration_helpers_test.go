@@ -13,7 +13,6 @@ import (
 	"github.com/huynhanx03/go-common/pkg/testutil/containers"
 	"github.com/huynhanx03/go-common/pkg/toggle"
 	toggleent "github.com/huynhanx03/go-common/pkg/toggle/ent"
-	"github.com/huynhanx03/go-common/pkg/toggle/ent/internal/testent"
 	"github.com/huynhanx03/go-common/pkg/toggle/unleash"
 	_ "github.com/lib/pq"
 )
@@ -37,11 +36,10 @@ func newPostgres(t *testing.T) (*sql.DB, dialect.Driver, *toggleent.Store, *togg
 	if err := db.PingContext(ctx); err != nil {
 		t.Fatalf("connect to test database: %v", err)
 	}
-	driver := entsql.OpenDB(dialect.Postgres, db)
-	fixture := testent.NewClient(testent.Driver(driver))
-	if err := fixture.Schema.Create(ctx); err != nil {
-		t.Fatalf("migrate toggle test schemas: %v", err)
+	if err := createToggleSchema(ctx, db); err != nil {
+		t.Fatalf("create toggle test schema: %v", err)
 	}
+	driver := entsql.OpenDB(dialect.Postgres, db)
 	store, err := toggleent.NewStore(driver)
 	if err != nil {
 		t.Fatal(err)
@@ -51,6 +49,36 @@ func newPostgres(t *testing.T) (*sql.DB, dialect.Driver, *toggleent.Store, *togg
 		t.Fatal(err)
 	}
 	return db, driver, store, manager
+}
+
+func createToggleSchema(ctx context.Context, db *sql.DB) error {
+	const scopeTable = `
+		CREATE TABLE toggle_scopes (
+			id SERIAL PRIMARY KEY,
+			namespace VARCHAR(100) NOT NULL,
+			environment VARCHAR(100) NOT NULL,
+			revision BIGINT NOT NULL DEFAULT 0,
+			CONSTRAINT toggle_revision_nonnegative CHECK (revision >= 0),
+			CONSTRAINT scope_namespace_environment UNIQUE (namespace, environment)
+		)`
+	const flagTable = `
+		CREATE TABLE toggle_flags (
+			id SERIAL PRIMARY KEY,
+			namespace VARCHAR(100) NOT NULL,
+			environment VARCHAR(100) NOT NULL,
+			key VARCHAR(100) NOT NULL,
+			enabled BOOLEAN NOT NULL DEFAULT FALSE,
+			description VARCHAR(4096) NOT NULL DEFAULT '',
+			definition JSONB NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			CONSTRAINT flag_namespace_environment_key UNIQUE (namespace, environment, key)
+		)`
+	if _, err := db.ExecContext(ctx, scopeTable); err != nil {
+		return err
+	}
+	_, err := db.ExecContext(ctx, flagTable)
+	return err
 }
 
 func integrationFlag(key string, enabled bool) toggle.Flag {

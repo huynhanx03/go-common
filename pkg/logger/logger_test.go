@@ -49,16 +49,15 @@ func TestLoggerPanicAndDPanic(t *testing.T) {
 	}
 }
 
-func TestLoggerCoreAndSetLevelRecovery(t *testing.T) {
+func TestWrappedLoggerWithoutDynamicLevel(t *testing.T) {
 	log := Wrap(zap.NewNop())
 	if log.Core() == nil {
 		t.Fatal("Core() returned nil")
 	}
-	invalidAtomic := &Logger{base: zap.NewNop()}
-	if err := invalidAtomic.SetLevel("debug"); err != ErrInvalidLogger {
+	if err := log.SetLevel("debug"); err != ErrInvalidLogger {
 		t.Fatalf("SetLevel on zero AtomicLevel error = %v, want ErrInvalidLogger", err)
 	}
-	if invalidAtomic.CurrentLevel() != "" {
+	if log.CurrentLevel() != "" {
 		t.Fatal("CurrentLevel on zero AtomicLevel should be unavailable")
 	}
 }

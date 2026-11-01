@@ -118,13 +118,9 @@ func (s *Store) Load(ctx context.Context, scope toggle.Scope) (toggle.Snapshot, 
 		if err := json.Unmarshal([]byte(definition.String), &envelope); err != nil || envelope.SchemaVersion != 1 {
 			return toggle.Snapshot{}, sourceFailure(toggle.ErrInvalidDefinition)
 		}
-		flag, err := toggle.NormalizeFlag(toggle.Flag{
+		snapshot.Flags = append(snapshot.Flags, toggle.Flag{
 			Key: key.String, Description: description.String, Enabled: enabled.Bool, Rules: envelope.Rules,
 		})
-		if err != nil {
-			return toggle.Snapshot{}, sourceFailure(err)
-		}
-		snapshot.Flags = append(snapshot.Flags, flag)
 	}
 	if err := rows.Err(); err != nil {
 		return toggle.Snapshot{}, storageFailure(err)
@@ -143,7 +139,7 @@ func (s *Store) Load(ctx context.Context, scope toggle.Scope) (toggle.Snapshot, 
 }
 
 // Put atomically claims the next scope revision and upserts a complete flag.
-func (s *Store) Put(ctx context.Context, scope toggle.Scope, flag toggle.Flag, expectedRevision int64) (revision int64, err error) {
+func (s *Store) Put(ctx context.Context, scope toggle.Scope, flag toggle.Flag, expectedRevision int64) (int64, error) {
 	if err := s.validateWrite(ctx, scope, expectedRevision); err != nil {
 		return 0, err
 	}
@@ -159,34 +155,15 @@ func (s *Store) Put(ctx context.Context, scope toggle.Scope, flag toggle.Flag, e
 		return 0, sourceFailure(toggle.ErrLimit)
 	}
 
-	tx, err := s.driver.Tx(ctx)
-	if err != nil {
-		return 0, storageFailure(err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			if rollbackErr := tx.Rollback(); rollbackErr != nil {
-				err = errors.Join(err, storageFailure(rollbackErr))
-			}
+	return s.withRevision(ctx, scope, expectedRevision, func(tx dialect.Tx) error {
+		count, exists, err := flagCount(ctx, tx, scope, normalized.Key)
+		if err != nil {
+			return storageFailure(err)
 		}
-	}()
-
-	if err = ensureScope(ctx, tx, scope); err != nil {
-		return 0, err
-	}
-	revision, err = claimRevision(ctx, tx, scope, expectedRevision)
-	if err != nil {
-		return 0, err
-	}
-	count, exists, err := flagCount(ctx, tx, scope, normalized.Key)
-	if err != nil {
-		return 0, storageFailure(err)
-	}
-	if !exists && count >= maxFlagsPerScope {
-		return 0, sourceFailure(toggle.ErrLimit)
-	}
-	if err = execute(ctx, tx, `
+		if !exists && count >= maxFlagsPerScope {
+			return sourceFailure(toggle.ErrLimit)
+		}
+		if err := execute(ctx, tx, `
 		INSERT INTO toggle_flags(namespace, environment, key, enabled, description, definition, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6::jsonb, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 		ON CONFLICT (namespace, environment, key) DO UPDATE
@@ -194,24 +171,38 @@ func (s *Store) Put(ctx context.Context, scope toggle.Scope, flag toggle.Flag, e
 		    description = EXCLUDED.description,
 		    definition = EXCLUDED.definition,
 		    updated_at = CURRENT_TIMESTAMP`,
-		scope.Namespace, scope.Environment, normalized.Key, normalized.Enabled, normalized.Description, string(definition)); err != nil {
-		return 0, storageFailure(err)
-	}
-	if err = tx.Commit(); err != nil {
-		return 0, storageFailure(err)
-	}
-	committed = true
-	return revision, nil
+			scope.Namespace, scope.Environment, normalized.Key, normalized.Enabled, normalized.Description, string(definition)); err != nil {
+			return storageFailure(err)
+		}
+		return nil
+	})
 }
 
 // Delete atomically claims the next scope revision and removes an existing flag.
-func (s *Store) Delete(ctx context.Context, scope toggle.Scope, key string, expectedRevision int64) (revision int64, err error) {
+func (s *Store) Delete(ctx context.Context, scope toggle.Scope, key string, expectedRevision int64) (int64, error) {
 	if err := s.validateWrite(ctx, scope, expectedRevision); err != nil {
 		return 0, err
 	}
 	if err := validateKey(key); err != nil {
 		return 0, err
 	}
+	return s.withRevision(ctx, scope, expectedRevision, func(tx dialect.Tx) error {
+		result, err := executeResult(ctx, tx, `DELETE FROM toggle_flags WHERE namespace=$1 AND environment=$2 AND key=$3`, scope.Namespace, scope.Environment, key)
+		if err != nil {
+			return storageFailure(err)
+		}
+		changed, err := result.RowsAffected()
+		if err != nil {
+			return storageFailure(err)
+		}
+		if changed == 0 {
+			return storeFailure(toggle.ErrNotFound, nil)
+		}
+		return nil
+	})
+}
+
+func (s *Store) withRevision(ctx context.Context, scope toggle.Scope, expectedRevision int64, write func(dialect.Tx) error) (revision int64, err error) {
 	tx, err := s.driver.Tx(ctx)
 	if err != nil {
 		return 0, storageFailure(err)
@@ -224,6 +215,7 @@ func (s *Store) Delete(ctx context.Context, scope toggle.Scope, key string, expe
 			}
 		}
 	}()
+
 	if err = ensureScope(ctx, tx, scope); err != nil {
 		return 0, err
 	}
@@ -231,16 +223,8 @@ func (s *Store) Delete(ctx context.Context, scope toggle.Scope, key string, expe
 	if err != nil {
 		return 0, err
 	}
-	result, err := executeResult(ctx, tx, `DELETE FROM toggle_flags WHERE namespace=$1 AND environment=$2 AND key=$3`, scope.Namespace, scope.Environment, key)
-	if err != nil {
-		return 0, storageFailure(err)
-	}
-	changed, err := result.RowsAffected()
-	if err != nil {
-		return 0, storageFailure(err)
-	}
-	if changed == 0 {
-		return 0, storeFailure(toggle.ErrNotFound, nil)
+	if err = write(tx); err != nil {
+		return 0, err
 	}
 	if err = tx.Commit(); err != nil {
 		return 0, storageFailure(err)

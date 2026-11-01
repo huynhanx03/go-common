@@ -7,9 +7,9 @@ import (
 	"context"
 	"errors"
 	"strings"
-	"time"
 
 	"github.com/huynhanx03/go-common/pkg/logger"
+	"github.com/huynhanx03/go-common/pkg/security"
 )
 
 const (
@@ -50,7 +50,6 @@ type MetadataSource struct {
 	Scheme             string
 	Optional           bool
 	MaxCredentialBytes int
-	Now                func() time.Time
 }
 
 func DefaultBearerMetadataSource() MetadataSource {
@@ -58,7 +57,6 @@ func DefaultBearerMetadataSource() MetadataSource {
 		MetadataKey:        DefaultCredentialMetadataKey,
 		Scheme:             DefaultCredentialScheme,
 		MaxCredentialBytes: DefaultMaxCredentialBytes,
-		Now:                time.Now,
 	}
 }
 
@@ -72,9 +70,6 @@ func NormalizeMetadataSource(input MetadataSource) (MetadataSource, error) {
 	if input.MaxCredentialBytes == 0 {
 		input.MaxCredentialBytes = DefaultMaxCredentialBytes
 	}
-	if input.Now == nil {
-		input.Now = time.Now
-	}
 	input.Scheme = strings.ToLower(input.Scheme)
 	if !validMetadataKey(input.MetadataKey) ||
 		!validToken(input.Scheme, maxSchemeBytes) ||
@@ -85,18 +80,12 @@ func NormalizeMetadataSource(input MetadataSource) (MetadataSource, error) {
 	return input, nil
 }
 
-// Permission is resolved by the application from a method and request. It is
-// deliberately free of service-specific roles, domains, and object facts.
-type Permission struct {
-	Resource string
-	Action   string
-}
-
+// PermissionResolver maps a method/request to an application-resolved scope and object.
 type PermissionResolver func(
 	ctx context.Context,
 	fullMethod string,
 	request any,
-) (Permission, error)
+) (security.Permission, error)
 
 func validMetadataKey(value string) bool {
 	if value == "" ||
