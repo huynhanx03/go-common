@@ -3,7 +3,6 @@
 package ent
 
 import (
-	"encoding/json"
 	"time"
 
 	"entgo.io/ent"
@@ -13,6 +12,8 @@ import (
 	"entgo.io/ent/schema/field"
 	"entgo.io/ent/schema/index"
 	"entgo.io/ent/schema/mixin"
+	jsoncodec "github.com/huynhanx03/go-common/pkg/encoding/json"
+	"github.com/huynhanx03/go-common/pkg/toggle/core"
 )
 
 // ScopeMixin provides the canonical fields required by the PostgreSQL Store.
@@ -22,8 +23,8 @@ type ScopeMixin struct{ mixin.Schema }
 
 func (ScopeMixin) Fields() []ent.Field {
 	return []ent.Field{
-		field.String("namespace").NotEmpty().MaxLen(100),
-		field.String("environment").NotEmpty().MaxLen(100),
+		field.String("namespace").NotEmpty().MaxLen(core.MaxIdentifierLength),
+		field.String("environment").NotEmpty().MaxLen(core.MaxIdentifierLength),
 		field.Int64("revision").NonNegative().Default(0),
 	}
 }
@@ -43,12 +44,12 @@ type FlagMixin struct{ mixin.Schema }
 
 func (FlagMixin) Fields() []ent.Field {
 	return []ent.Field{
-		field.String("namespace").NotEmpty().MaxLen(100),
-		field.String("environment").NotEmpty().MaxLen(100),
-		field.String("key").NotEmpty().MaxLen(100),
+		field.String("namespace").NotEmpty().MaxLen(core.MaxIdentifierLength),
+		field.String("environment").NotEmpty().MaxLen(core.MaxIdentifierLength),
+		field.String("key").NotEmpty().MaxLen(core.MaxIdentifierLength),
 		field.Bool("enabled").Default(false),
-		field.String("description").Default("").MaxLen(4096),
-		field.JSON("definition", json.RawMessage{}).SchemaType(map[string]string{dialect.Postgres: "jsonb"}),
+		field.String("description").Default("").MaxLen(core.MaxFlagDescriptionLength),
+		field.JSON("definition", jsoncodec.RawMessage{}).SchemaType(map[string]string{dialect.Postgres: "jsonb"}),
 		field.Time("created_at").Default(time.Now).Immutable().Annotations(entsql.Annotation{DefaultExpr: "CURRENT_TIMESTAMP"}),
 		field.Time("updated_at").Default(time.Now).UpdateDefault(time.Now).Annotations(entsql.Annotation{DefaultExpr: "CURRENT_TIMESTAMP"}),
 	}

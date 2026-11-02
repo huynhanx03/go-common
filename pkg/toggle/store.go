@@ -1,11 +1,7 @@
 package toggle
 
-import "context"
+import "github.com/huynhanx03/go-common/pkg/toggle/core"
 
 // Store persists complete definitions using scope-level revision preconditions.
 // Implementations must validate direct calls and return owned snapshots.
-type Store interface {
-	Source
-	Put(context.Context, Scope, Flag, int64) (int64, error)
-	Delete(context.Context, Scope, string, int64) (int64, error)
-}
+type Store = core.Store

@@ -3,21 +3,16 @@ package ent
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
-	"math"
-	"reflect"
 
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
+	jsoncodec "github.com/huynhanx03/go-common/pkg/encoding/json"
 	"github.com/huynhanx03/go-common/pkg/toggle"
+	"github.com/huynhanx03/go-common/pkg/toggle/core"
 )
 
-const (
-	maxFlagsPerScope = 10_000
-	maxDefinition    = 64 << 10
-	maxSnapshot      = 16 << 20
-)
+const definitionSchemaVersion = 1
 
 // Store persists toggle definitions in the canonical PostgreSQL tables. It
 // borrows the caller's driver and never closes it or runs migrations.
@@ -25,23 +20,10 @@ type Store struct{ driver dialect.Driver }
 
 // NewStore creates a PostgreSQL Store over a caller-owned Ent SQL driver.
 func NewStore(driver dialect.Driver) (*Store, error) {
-	if nilDriver(driver) || driver.Dialect() != dialect.Postgres {
+	if core.IsNil(driver) || driver.Dialect() != dialect.Postgres {
 		return nil, toggle.ErrInvalidConfig
 	}
 	return &Store{driver: driver}, nil
-}
-
-func nilDriver(driver dialect.Driver) bool {
-	if driver == nil {
-		return true
-	}
-	value := reflect.ValueOf(driver)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return value.IsNil()
-	default:
-		return false
-	}
 }
 
 type definitionEnvelope struct {
@@ -53,7 +35,7 @@ type definitionEnvelope struct {
 // joined statement observes one PostgreSQL statement snapshot and caps both
 // row count and serialized definition bytes before data is decoded in Go.
 func (s *Store) Load(ctx context.Context, scope toggle.Scope) (toggle.Snapshot, error) {
-	if s == nil || nilDriver(s.driver) {
+	if s == nil || core.IsNil(s.driver) {
 		return toggle.Snapshot{}, toggle.ErrInvalidConfig
 	}
 	if err := storageContext(ctx); err != nil {
@@ -64,7 +46,7 @@ func (s *Store) Load(ctx context.Context, scope toggle.Scope) (toggle.Snapshot, 
 	}
 	query := `
 		SELECT s.revision, f.key, f.description, f.enabled,
-		       CASE WHEN octet_length(f.definition::text) <= $3 THEN f.definition::text ELSE NULL END,
+		   CASE WHEN octet_length(f.definition::text) <= $3 THEN f.definition::text ELSE NULL END,
 		       octet_length(f.definition::text)
 		FROM toggle_scopes AS s
 		LEFT JOIN toggle_flags AS f
@@ -73,7 +55,7 @@ func (s *Store) Load(ctx context.Context, scope toggle.Scope) (toggle.Snapshot, 
 		ORDER BY f.key
 		LIMIT $4`
 	var rows entsql.Rows
-	if err := s.driver.Query(ctx, query, []any{scope.Namespace, scope.Environment, maxDefinition, maxFlagsPerScope + 1}, &rows); err != nil {
+	if err := s.driver.Query(ctx, query, []any{scope.Namespace, scope.Environment, core.MaxDefinitionSize, core.MaxFlagsPerSnapshot + 1}, &rows); err != nil {
 		return toggle.Snapshot{}, storageFailure(err)
 	}
 	defer rows.Close()
@@ -90,7 +72,7 @@ func (s *Store) Load(ctx context.Context, scope toggle.Scope) (toggle.Snapshot, 
 			return toggle.Snapshot{}, storageFailure(err)
 		}
 		if revisionSet && snapshot.Revision != revision {
-			return toggle.Snapshot{}, sourceFailure(toggle.ErrInvalidDefinition)
+			return toggle.Snapshot{}, core.SourceError(toggle.ErrInvalidDefinition)
 		}
 		snapshot.Revision = revision
 		revisionSet = true
@@ -98,25 +80,25 @@ func (s *Store) Load(ctx context.Context, scope toggle.Scope) (toggle.Snapshot, 
 			// LEFT JOIN emits a null key only for an existing scope with no flags.
 			continue
 		}
-		if len(snapshot.Flags) == maxFlagsPerScope {
-			return toggle.Snapshot{}, sourceFailure(toggle.ErrLimit)
+		if len(snapshot.Flags) == core.MaxFlagsPerSnapshot {
+			return toggle.Snapshot{}, core.SourceError(toggle.ErrLimit)
 		}
 		if !description.Valid || !enabled.Valid || !definitionBytes.Valid {
-			return toggle.Snapshot{}, sourceFailure(toggle.ErrInvalidDefinition)
+			return toggle.Snapshot{}, core.SourceError(toggle.ErrInvalidDefinition)
 		}
-		if definitionBytes.Int64 > maxDefinition {
-			return toggle.Snapshot{}, sourceFailure(toggle.ErrLimit)
+		if definitionBytes.Int64 > core.MaxDefinitionSize {
+			return toggle.Snapshot{}, core.SourceError(toggle.ErrLimit)
 		}
 		if !definition.Valid {
-			return toggle.Snapshot{}, sourceFailure(toggle.ErrInvalidDefinition)
+			return toggle.Snapshot{}, core.SourceError(toggle.ErrInvalidDefinition)
 		}
 		totalBytes += int64(len(key.String)+len(description.String)) + definitionBytes.Int64
-		if totalBytes > maxSnapshot {
-			return toggle.Snapshot{}, sourceFailure(toggle.ErrLimit)
+		if totalBytes > core.MaxSnapshotSize {
+			return toggle.Snapshot{}, core.SourceError(toggle.ErrLimit)
 		}
 		var envelope definitionEnvelope
-		if err := json.Unmarshal([]byte(definition.String), &envelope); err != nil || envelope.SchemaVersion != 1 {
-			return toggle.Snapshot{}, sourceFailure(toggle.ErrInvalidDefinition)
+		if err := jsoncodec.Unmarshal([]byte(definition.String), &envelope); err != nil || envelope.SchemaVersion != definitionSchemaVersion {
+			return toggle.Snapshot{}, core.SourceError(toggle.ErrInvalidDefinition)
 		}
 		snapshot.Flags = append(snapshot.Flags, toggle.Flag{
 			Key: key.String, Description: description.String, Enabled: enabled.Bool, Rules: envelope.Rules,
@@ -133,7 +115,7 @@ func (s *Store) Load(ctx context.Context, scope toggle.Scope) (toggle.Snapshot, 
 	}
 	normalized, err := toggle.NormalizeSnapshot(scope, snapshot)
 	if err != nil {
-		return toggle.Snapshot{}, sourceFailure(err)
+		return toggle.Snapshot{}, core.SourceError(err)
 	}
 	return normalized, nil
 }
@@ -147,12 +129,12 @@ func (s *Store) Put(ctx context.Context, scope toggle.Scope, flag toggle.Flag, e
 	if err != nil {
 		return 0, err
 	}
-	definition, err := json.Marshal(definitionEnvelope{SchemaVersion: 1, Rules: normalized.Rules})
+	definition, err := jsoncodec.Marshal(definitionEnvelope{SchemaVersion: definitionSchemaVersion, Rules: normalized.Rules})
 	if err != nil {
-		return 0, sourceFailure(toggle.ErrInvalidDefinition)
+		return 0, core.SourceError(toggle.ErrInvalidDefinition)
 	}
-	if len(definition) > maxDefinition {
-		return 0, sourceFailure(toggle.ErrLimit)
+	if len(definition) > core.MaxDefinitionSize {
+		return 0, core.SourceError(toggle.ErrLimit)
 	}
 
 	return s.withRevision(ctx, scope, expectedRevision, func(tx dialect.Tx) error {
@@ -160,8 +142,8 @@ func (s *Store) Put(ctx context.Context, scope toggle.Scope, flag toggle.Flag, e
 		if err != nil {
 			return storageFailure(err)
 		}
-		if !exists && count >= maxFlagsPerScope {
-			return sourceFailure(toggle.ErrLimit)
+		if !exists && count >= core.MaxFlagsPerSnapshot {
+			return core.SourceError(toggle.ErrLimit)
 		}
 		if err := execute(ctx, tx, `
 		INSERT INTO toggle_flags(namespace, environment, key, enabled, description, definition, created_at, updated_at)
@@ -234,7 +216,7 @@ func (s *Store) withRevision(ctx context.Context, scope toggle.Scope, expectedRe
 }
 
 func (s *Store) validateWrite(ctx context.Context, scope toggle.Scope, expectedRevision int64) error {
-	if s == nil || nilDriver(s.driver) {
+	if s == nil || core.IsNil(s.driver) {
 		return toggle.ErrInvalidConfig
 	}
 	if err := storageContext(ctx); err != nil {
@@ -243,27 +225,15 @@ func (s *Store) validateWrite(ctx context.Context, scope toggle.Scope, expectedR
 	if err := toggle.ValidateScope(scope); err != nil {
 		return err
 	}
-	if expectedRevision < 0 || expectedRevision == math.MaxInt64 {
-		return toggle.ErrInvalidDefinition
-	}
-	return nil
+	return core.ValidateExpectedRevision(expectedRevision)
 }
 
 func validateKey(key string) error {
-	if _, err := toggle.NormalizeFlag(toggle.Flag{Key: key}); err != nil {
-		return err
-	}
-	return nil
+	return core.Identifier(key, core.MaxIdentifierLength, toggle.ErrInvalidDefinition)
 }
 
 func storageContext(ctx context.Context) error {
-	if ctx == nil {
-		return toggle.ErrInvalidContext
-	}
-	if err := ctx.Err(); err != nil {
-		return storeFailure(toggle.ErrInvalidContext, err)
-	}
-	return nil
+	return core.ValidateContext(ctx)
 }
 
 func ensureScope(ctx context.Context, tx dialect.Tx, scope toggle.Scope) error {
@@ -304,7 +274,7 @@ func flagCount(ctx context.Context, tx dialect.Tx, scope toggle.Scope, key strin
 		if err := rows.Err(); err != nil {
 			return 0, false, err
 		}
-		return 0, false, errors.New("toggle: count query returned no row")
+		return 0, false, errors.New("count query returned no row")
 	}
 	var count int64
 	var exists bool
@@ -325,42 +295,21 @@ func executeResult(ctx context.Context, executor dialect.ExecQuerier, query stri
 		return nil, err
 	}
 	if result == nil {
-		return nil, errors.New("toggle: driver returned no SQL result")
+		return nil, errors.New("driver returned no SQL result")
 	}
 	return result, nil
 }
 
 type safeStoreError struct {
-	category error
-	cause    error
+	cause error
 }
 
-func (e safeStoreError) Error() string {
-	if e.category != nil {
-		return e.category.Error()
-	}
-	return "toggle: storage operation failed"
-}
-
-func (e safeStoreError) Unwrap() []error {
-	if e.category == nil {
-		if e.cause == nil {
-			return nil
-		}
-		return []error{e.cause}
-	}
-	if e.cause == nil {
-		return []error{e.category}
-	}
-	return []error{e.category, e.cause}
-}
+func (e safeStoreError) Error() string { return "storage operation failed" }
+func (e safeStoreError) Unwrap() error { return e.cause }
 
 func storeFailure(category, cause error) error {
-	return safeStoreError{category: category, cause: cause}
+	return core.Wrap(category, cause)
 }
 func storageFailure(cause error) error { return safeStoreError{cause: cause} }
-func sourceFailure(cause error) error {
-	return safeStoreError{category: toggle.ErrSource, cause: cause}
-}
 
 var _ toggle.Store = (*Store)(nil)

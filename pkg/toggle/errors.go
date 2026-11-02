@@ -1,28 +1,18 @@
 package toggle
 
-import "errors"
+import "github.com/huynhanx03/go-common/pkg/toggle/core"
 
 var (
-	ErrInvalidConfig     = errors.New("toggle: invalid configuration")
-	ErrInvalidDefinition = errors.New("toggle: invalid definition")
-	ErrInvalidContext    = errors.New("toggle: invalid evaluation context")
-	ErrLimit             = errors.New("toggle: limit exceeded")
-	ErrNotFound          = errors.New("toggle: flag not found")
-	ErrConflict          = errors.New("toggle: revision conflict")
-	ErrStaleRevision     = errors.New("toggle: stale revision")
-	ErrClosed            = errors.New("toggle: client closed")
-	ErrSource            = errors.New("toggle: source failed")
+	ErrInvalidConfig     = core.ErrInvalidConfig
+	ErrInvalidDefinition = core.ErrInvalidDefinition
+	ErrInvalidContext    = core.ErrInvalidContext
+	ErrLimit             = core.ErrLimit
+	ErrNotFound          = core.ErrNotFound
+	ErrConflict          = core.ErrConflict
+	ErrStaleRevision     = core.ErrStaleRevision
+	ErrClosed            = core.ErrClosed
+	ErrSource            = core.ErrSource
 )
-
-// categorizedError keeps error text independent of user-provided causes.
-type categorizedError struct {
-	category error
-	cause    error
-}
-
-func (e categorizedError) Error() string   { return e.category.Error() }
-func (e categorizedError) Unwrap() []error { return []error{e.category, e.cause} }
-func invalidLimit(category error) error    { return categorizedError{category, ErrLimit} }
 
 type operationError struct {
 	operation string

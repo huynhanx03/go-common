@@ -75,6 +75,70 @@ func TestManagerRejectsMissingStore(t *testing.T) {
 	if _, err := toggle.NewManager(nil); !errors.Is(err, toggle.ErrInvalidConfig) {
 		t.Fatalf("NewManager(nil) error=%v", err)
 	}
+	var typedNil *recordingStore
+	if _, err := toggle.NewManager(typedNil); !errors.Is(err, toggle.ErrInvalidConfig) {
+		t.Fatalf("NewManager(typed nil) error=%v", err)
+	}
+}
+
+func TestManagerAcceptsValueStoreImplementations(t *testing.T) {
+	manager, err := toggle.NewManager(valueStore{snapshot: toggle.Snapshot{
+		Scope: managerScope, Revision: 1, Flags: []toggle.Flag{{Key: "checkout", Enabled: true}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot, err := manager.List(context.Background(), managerScope)
+	if err != nil || snapshot.Revision != 1 || len(snapshot.Flags) != 1 || !snapshot.Flags[0].Enabled {
+		t.Fatalf("List() = (%+v, %v), want the stored value snapshot", snapshot, err)
+	}
+}
+
+func TestManagerRejectsInvalidReadsAndDeletesBeforeStore(t *testing.T) {
+	store := &recordingStore{snapshot: toggle.Snapshot{Scope: managerScope, Revision: 1}}
+	manager, err := toggle.NewManager(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := manager.List(nil, managerScope); !errors.Is(err, toggle.ErrInvalidContext) {
+		t.Errorf("List(nil context) error = %v", err)
+	}
+	if _, err := manager.List(context.Background(), toggle.Scope{Namespace: "bad scope", Environment: "test"}); !errors.Is(err, toggle.ErrInvalidConfig) {
+		t.Errorf("List(invalid scope) error = %v", err)
+	}
+	if _, _, err := manager.Get(canceled, managerScope, "checkout"); !errors.Is(err, context.Canceled) {
+		t.Errorf("Get(canceled context) error = %v", err)
+	}
+	if _, _, err := manager.Get(context.Background(), managerScope, "bad key"); !errors.Is(err, toggle.ErrInvalidDefinition) {
+		t.Errorf("Get(invalid key) error = %v", err)
+	}
+	if _, err := manager.Delete(context.Background(), managerScope, "bad key", 0); !errors.Is(err, toggle.ErrInvalidDefinition) {
+		t.Errorf("Delete(invalid key) error = %v", err)
+	}
+	if _, err := manager.Delete(context.Background(), managerScope, "checkout", -1); !errors.Is(err, toggle.ErrInvalidDefinition) {
+		t.Errorf("Delete(negative revision) error = %v", err)
+	}
+	if store.loads != 0 || store.deletes != 0 {
+		t.Fatalf("invalid requests reached store: loads=%d deletes=%d", store.loads, store.deletes)
+	}
+
+	var missing *toggle.Manager
+	if _, err := missing.List(context.Background(), managerScope); !errors.Is(err, toggle.ErrInvalidConfig) {
+		t.Errorf("nil Manager.List() error = %v", err)
+	}
+	if _, _, err := missing.Get(context.Background(), managerScope, "checkout"); !errors.Is(err, toggle.ErrInvalidConfig) {
+		t.Errorf("nil Manager.Get() error = %v", err)
+	}
+	if _, err := missing.Put(context.Background(), managerScope, validManagerFlag("checkout"), 0); !errors.Is(err, toggle.ErrInvalidConfig) {
+		t.Errorf("nil Manager.Put() error = %v", err)
+	}
+	if _, err := missing.Delete(context.Background(), managerScope, "checkout", 0); !errors.Is(err, toggle.ErrInvalidConfig) {
+		t.Errorf("nil Manager.Delete() error = %v", err)
+	}
 }
 
 func TestManagerRejectsInvalidWritesBeforeStore(t *testing.T) {

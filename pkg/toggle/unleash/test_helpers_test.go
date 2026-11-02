@@ -2,12 +2,13 @@ package unleash_test
 
 import (
 	"context"
+	"math"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/huynhanx03/go-common/pkg/settings"
 	"github.com/huynhanx03/go-common/pkg/toggle"
-	"github.com/huynhanx03/go-common/pkg/toggle/unleash"
 )
 
 type controlledSource struct {
@@ -37,7 +38,14 @@ func (f sourceFunc) Load(ctx context.Context, scope toggle.Scope) (toggle.Snapsh
 }
 func newClient(t *testing.T, source toggle.Source, scope toggle.Scope, interval time.Duration) toggle.Client {
 	t.Helper()
-	c, err := unleash.New(context.Background(), unleash.Config{Scope: scope, AppName: "billing-test", Source: source, RefreshInterval: interval, SourceTimeout: time.Second})
+	refreshSeconds := 0
+	if interval > 0 {
+		refreshSeconds = int(math.Ceil(interval.Seconds()))
+	}
+	c, err := toggle.New(context.Background(), settings.Toggle{
+		Namespace: scope.Namespace, Environment: settings.Env(scope.Environment), AppName: "billing-test",
+		RefreshIntervalSeconds: refreshSeconds, SourceTimeoutSeconds: 1,
+	}, source)
 	if err != nil {
 		t.Fatal(err)
 	}

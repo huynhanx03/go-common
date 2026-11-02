@@ -19,11 +19,17 @@ type apiStore struct {
 	mu       sync.Mutex
 	snapshot toggle.Snapshot
 	loads    int
+	loadErr  error
+	putErr   error
+	delErr   error
 }
 
 func (s *apiStore) Load(ctx context.Context, scope toggle.Scope) (toggle.Snapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return toggle.Snapshot{}, err
+	}
+	if s.loadErr != nil {
+		return toggle.Snapshot{}, s.loadErr
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -34,6 +40,9 @@ func (s *apiStore) Load(ctx context.Context, scope toggle.Scope) (toggle.Snapsho
 func (s *apiStore) Put(ctx context.Context, scope toggle.Scope, flag toggle.Flag, expected int64) (int64, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
+	}
+	if s.putErr != nil {
+		return 0, s.putErr
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -54,6 +63,9 @@ func (s *apiStore) Put(ctx context.Context, scope toggle.Scope, flag toggle.Flag
 func (s *apiStore) Delete(ctx context.Context, scope toggle.Scope, key string, expected int64) (int64, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
+	}
+	if s.delErr != nil {
+		return 0, s.delErr
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -85,6 +97,21 @@ func newGinHandler(t *testing.T, store *apiStore, authorize togglegin.Authorizer
 	return router
 }
 
+func TestNewRequiresManagerAndAuthorizer(t *testing.T) {
+	store := &apiStore{snapshot: toggle.Snapshot{Scope: toggle.Scope{Namespace: "billing", Environment: "production"}}}
+	manager, err := toggle.NewManager(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := togglegin.New(nil, togglegin.AuthorizerFunc(func(context.Context, toggle.Scope) error { return nil })); !errors.Is(err, toggle.ErrInvalidConfig) {
+		t.Fatalf("New(nil manager) error = %v", err)
+	}
+	var nilAuthorizer togglegin.AuthorizerFunc
+	if _, err := togglegin.New(manager, nilAuthorizer); !errors.Is(err, toggle.ErrInvalidConfig) {
+		t.Fatalf("New(typed nil authorizer) error = %v", err)
+	}
+}
+
 func TestGinManagementAPIProvidesScopedRevisionAwareCRUD(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	scope := toggle.Scope{Namespace: "billing", Environment: "production"}
@@ -109,6 +136,11 @@ func TestGinManagementAPIProvidesScopedRevisionAwareCRUD(t *testing.T) {
 	router.ServeHTTP(put, putRequest)
 	if put.Code != http.StatusOK || put.Header().Get("ETag") != `"1"` || !bytes.Contains(put.Body.Bytes(), []byte(`"revision":1`)) {
 		t.Fatalf("put = status %d etag %q body %q", put.Code, put.Header().Get("ETag"), put.Body.String())
+	}
+	populatedList := httptest.NewRecorder()
+	router.ServeHTTP(populatedList, httptest.NewRequest(http.MethodGet, path, nil))
+	if populatedList.Code != http.StatusOK || !bytes.Contains(populatedList.Body.Bytes(), []byte(`"key":"checkout-v2"`)) {
+		t.Fatalf("populated list = status %d body %q", populatedList.Code, populatedList.Body.String())
 	}
 
 	get := httptest.NewRecorder()
@@ -180,8 +212,14 @@ func TestGinManagementAPIRejectsUnconditionalStaleAndNonStrictWrites(t *testing.
 		want                 int
 	}{
 		{name: "missing revision", body: `{"key":"checkout-v2","enabled":true}`, want: http.StatusPreconditionRequired},
+		{name: "short revision", body: `{"key":"checkout-v2","enabled":true}`, revision: `"`, want: http.StatusBadRequest},
+		{name: "unquoted revision", body: `{"key":"checkout-v2","enabled":true}`, revision: `4`, want: http.StatusBadRequest},
+		{name: "embedded quote", body: `{"key":"checkout-v2","enabled":true}`, revision: `"4"5"`, want: http.StatusBadRequest},
+		{name: "negative revision", body: `{"key":"checkout-v2","enabled":true}`, revision: `"-1"`, want: http.StatusBadRequest},
+		{name: "overflow revision", body: `{"key":"checkout-v2","enabled":true}`, revision: `"9223372036854775808"`, want: http.StatusBadRequest},
 		{name: "stale revision", body: `{"key":"checkout-v2","enabled":true}`, revision: `"3"`, want: http.StatusPreconditionFailed},
 		{name: "path key mismatch", body: `{"key":"other","enabled":true}`, revision: `"4"`, want: http.StatusBadRequest},
+		{name: "invalid definition", body: `{"key":"checkout-v2","enabled":true,"rules":[{"rollout":101}]}`, revision: `"4"`, want: http.StatusBadRequest},
 		{name: "unknown field", body: `{"key":"checkout-v2","enabled":true,"unexpected":true}`, revision: `"4"`, want: http.StatusBadRequest},
 		{name: "duplicate field", body: `{"key":"checkout-v2","enabled":true,"enabled":false}`, revision: `"4"`, want: http.StatusBadRequest},
 		{name: "oversized body", body: `{"key":"checkout-v2","description":"` + strings.Repeat("x", 1<<20) + `"}`, revision: `"4"`, want: http.StatusRequestEntityTooLarge},
@@ -198,6 +236,52 @@ func TestGinManagementAPIRejectsUnconditionalStaleAndNonStrictWrites(t *testing.
 			}
 		})
 	}
+	deleteResponse := httptest.NewRecorder()
+	router.ServeHTTP(deleteResponse, httptest.NewRequest(http.MethodDelete, path, nil))
+	if deleteResponse.Code != http.StatusPreconditionRequired {
+		t.Fatalf("unconditional Delete status = %d, want %d", deleteResponse.Code, http.StatusPreconditionRequired)
+	}
+}
+
+type failingBody struct{}
+
+func (failingBody) Read([]byte) (int, error) { return 0, errors.New("request stream failed") }
+func (failingBody) Close() error            { return nil }
+
+func TestGinManagementAPIRejectsRequestReadFailuresAndInvalidScopes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	scope := toggle.Scope{Namespace: "billing", Environment: "production"}
+	store := &apiStore{snapshot: toggle.Snapshot{Scope: scope}}
+	authorizeCalls := 0
+	router := newGinHandler(t, store, togglegin.AuthorizerFunc(func(context.Context, toggle.Scope) error {
+		authorizeCalls++
+		return nil
+	}))
+	for _, test := range []struct{ method, suffix string }{
+		{method: http.MethodGet},
+		{method: http.MethodGet, suffix: "/checkout"},
+		{method: http.MethodPut, suffix: "/checkout"},
+		{method: http.MethodDelete, suffix: "/checkout"},
+	} {
+		badScope := httptest.NewRecorder()
+		path := "/admin/v1/toggles/bad%20scope/production" + test.suffix
+		router.ServeHTTP(badScope, httptest.NewRequest(test.method, path, nil))
+		if badScope.Code != http.StatusBadRequest {
+			t.Errorf("invalid %s scope response = %d", test.method, badScope.Code)
+		}
+	}
+	if authorizeCalls != 0 {
+		t.Fatalf("invalid scopes reached authorizer %d times", authorizeCalls)
+	}
+
+	request := httptest.NewRequest(http.MethodPut, "/admin/v1/toggles/billing/production/checkout", nil)
+	request.Header.Set("If-Match", `"0"`)
+	request.Body = failingBody{}
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("failed request read status = %d body=%q", response.Code, response.Body.String())
+	}
 }
 
 func TestGinManagementAPIHidesAuthorizationBackendErrors(t *testing.T) {
@@ -210,5 +294,37 @@ func TestGinManagementAPIHidesAuthorizationBackendErrors(t *testing.T) {
 	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/admin/v1/toggles/billing/production", nil))
 	if response.Code != http.StatusInternalServerError || bytes.Contains(response.Body.Bytes(), []byte("authorization service unavailable")) {
 		t.Fatalf("authorization error = status %d body %q", response.Code, response.Body.String())
+	}
+}
+
+func TestGinManagementAPIHidesStoreFailures(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	scope := toggle.Scope{Namespace: "billing", Environment: "production"}
+	backendErr := errors.New("database password is unavailable")
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+		store  *apiStore
+	}{
+		{name: "list", method: http.MethodGet, path: "/admin/v1/toggles/billing/production", store: &apiStore{loadErr: backendErr}},
+		{name: "get", method: http.MethodGet, path: "/admin/v1/toggles/billing/production/checkout", store: &apiStore{loadErr: backendErr}},
+		{name: "put", method: http.MethodPut, path: "/admin/v1/toggles/billing/production/checkout", body: `{"key":"checkout","enabled":true}`, store: &apiStore{putErr: backendErr}},
+		{name: "delete", method: http.MethodDelete, path: "/admin/v1/toggles/billing/production/checkout", store: &apiStore{snapshot: toggle.Snapshot{Scope: scope}, delErr: backendErr}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			router := newGinHandler(t, test.store, togglegin.AuthorizerFunc(func(context.Context, toggle.Scope) error { return nil }))
+			request := httptest.NewRequest(test.method, test.path, strings.NewReader(test.body))
+			if test.method == http.MethodPut || test.method == http.MethodDelete {
+				request.Header.Set("If-Match", `"0"`)
+			}
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != http.StatusInternalServerError || bytes.Contains(response.Body.Bytes(), []byte(backendErr.Error())) {
+				t.Fatalf("backend failure response = %d %q", response.Code, response.Body.String())
+			}
+		})
 	}
 }

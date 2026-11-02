@@ -5,15 +5,18 @@ package ent_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"math"
 	"testing"
 	"time"
 
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
+	"github.com/huynhanx03/go-common/pkg/settings"
 	"github.com/huynhanx03/go-common/pkg/testutil/containers"
 	"github.com/huynhanx03/go-common/pkg/toggle"
+	"github.com/huynhanx03/go-common/pkg/toggle/core"
 	toggleent "github.com/huynhanx03/go-common/pkg/toggle/ent"
-	"github.com/huynhanx03/go-common/pkg/toggle/unleash"
 	_ "github.com/lib/pq"
 )
 
@@ -52,28 +55,28 @@ func newPostgres(t *testing.T) (*sql.DB, dialect.Driver, *toggleent.Store, *togg
 }
 
 func createToggleSchema(ctx context.Context, db *sql.DB) error {
-	const scopeTable = `
+	scopeTable := fmt.Sprintf(`
 		CREATE TABLE toggle_scopes (
 			id SERIAL PRIMARY KEY,
-			namespace VARCHAR(100) NOT NULL,
-			environment VARCHAR(100) NOT NULL,
+			namespace VARCHAR(%d) NOT NULL,
+			environment VARCHAR(%d) NOT NULL,
 			revision BIGINT NOT NULL DEFAULT 0,
 			CONSTRAINT toggle_revision_nonnegative CHECK (revision >= 0),
 			CONSTRAINT scope_namespace_environment UNIQUE (namespace, environment)
-		)`
-	const flagTable = `
+		)`, core.MaxIdentifierLength, core.MaxIdentifierLength)
+	flagTable := fmt.Sprintf(`
 		CREATE TABLE toggle_flags (
 			id SERIAL PRIMARY KEY,
-			namespace VARCHAR(100) NOT NULL,
-			environment VARCHAR(100) NOT NULL,
-			key VARCHAR(100) NOT NULL,
+			namespace VARCHAR(%d) NOT NULL,
+			environment VARCHAR(%d) NOT NULL,
+			key VARCHAR(%d) NOT NULL,
 			enabled BOOLEAN NOT NULL DEFAULT FALSE,
-			description VARCHAR(4096) NOT NULL DEFAULT '',
+			description VARCHAR(%d) NOT NULL DEFAULT '',
 			definition JSONB NOT NULL,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			CONSTRAINT flag_namespace_environment_key UNIQUE (namespace, environment, key)
-		)`
+		)`, core.MaxIdentifierLength, core.MaxIdentifierLength, core.MaxIdentifierLength, core.MaxFlagDescriptionLength)
 	if _, err := db.ExecContext(ctx, scopeTable); err != nil {
 		return err
 	}
@@ -98,10 +101,14 @@ func targetedFlag(user string) toggle.Flag {
 
 func newEntClient(t *testing.T, source toggle.Source, refresh time.Duration) toggle.Client {
 	t.Helper()
-	client, err := unleash.New(context.Background(), unleash.Config{
-		Scope: postgresScope, AppName: "billing-integration", Source: source,
-		RefreshInterval: refresh, SourceTimeout: time.Second,
-	})
+	refreshSeconds := 0
+	if refresh > 0 {
+		refreshSeconds = int(math.Ceil(refresh.Seconds()))
+	}
+	client, err := toggle.New(context.Background(), settings.Toggle{
+		Namespace: postgresScope.Namespace, Environment: settings.Env(postgresScope.Environment), AppName: "billing-integration",
+		RefreshIntervalSeconds: refreshSeconds, SourceTimeoutSeconds: 1,
+	}, source)
 	if err != nil {
 		t.Fatal(err)
 	}

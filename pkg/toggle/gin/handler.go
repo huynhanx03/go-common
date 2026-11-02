@@ -6,13 +6,13 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"reflect"
 	"strconv"
 	"strings"
 
 	ginframework "github.com/gin-gonic/gin"
 	jsoncodec "github.com/huynhanx03/go-common/pkg/encoding/json"
 	"github.com/huynhanx03/go-common/pkg/toggle"
+	"github.com/huynhanx03/go-common/pkg/toggle/core"
 )
 
 const (
@@ -51,7 +51,7 @@ type Handler struct {
 // New creates a management handler. A manager and authorizer are required so
 // every route has a service-owned scope authorization decision.
 func New(manager *toggle.Manager, authorizer Authorizer) (*Handler, error) {
-	if manager == nil || nilInterface(authorizer) {
+	if manager == nil || core.IsNil(authorizer) {
 		return nil, toggle.ErrInvalidConfig
 	}
 	return &Handler{manager: manager, authorizer: authorizer}, nil
@@ -64,19 +64,6 @@ func (h *Handler) RegisterRoutes(routes ginframework.IRoutes) {
 	routes.Handle(http.MethodGet, basePath+"/:namespace/:environment/:key", h.noStore(h.get))
 	routes.Handle(http.MethodPut, basePath+"/:namespace/:environment/:key", h.noStore(h.put))
 	routes.Handle(http.MethodDelete, basePath+"/:namespace/:environment/:key", h.noStore(h.delete))
-}
-
-func nilInterface(value any) bool {
-	if value == nil {
-		return true
-	}
-	v := reflect.ValueOf(value)
-	switch v.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return v.IsNil()
-	default:
-		return false
-	}
 }
 
 func (h *Handler) noStore(next ginframework.HandlerFunc) ginframework.HandlerFunc {
@@ -109,9 +96,9 @@ func (h *Handler) list(c *ginframework.Context) {
 		return
 	}
 	setRevision(c, snapshot.Revision)
-	flags := make([]flagResponse, len(snapshot.Flags))
+	flags := make([]flagDTO, len(snapshot.Flags))
 	for i, flag := range snapshot.Flags {
-		flags[i] = responseFlag(flag)
+		flags[i] = dtoFromFlag(flag)
 	}
 	writeJSON(c, http.StatusOK, snapshotResponse{
 		Scope:    scopeResponse{Namespace: snapshot.Scope.Namespace, Environment: snapshot.Scope.Environment},
@@ -132,7 +119,7 @@ func (h *Handler) get(c *ginframework.Context) {
 		return
 	}
 	setRevision(c, revision)
-	writeJSON(c, http.StatusOK, responseFlag(flag))
+	writeJSON(c, http.StatusOK, dtoFromFlag(flag))
 }
 
 func (h *Handler) put(c *ginframework.Context) {
@@ -146,7 +133,7 @@ func (h *Handler) put(c *ginframework.Context) {
 		writeError(c, err)
 		return
 	}
-	var request flagRequest
+	var request flagDTO
 	if err := decodeJSON(c, &request); err != nil {
 		writeError(c, err)
 		return
@@ -155,7 +142,7 @@ func (h *Handler) put(c *ginframework.Context) {
 		writeError(c, toggle.ErrInvalidDefinition)
 		return
 	}
-	revision, err := h.manager.Put(c.Request.Context(), scope, request.flag(), expected)
+	revision, err := h.manager.Put(c.Request.Context(), scope, request.toFlag(), expected)
 	if err != nil {
 		writeError(c, err)
 		return
@@ -184,26 +171,19 @@ func (h *Handler) delete(c *ginframework.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-type flagRequest struct {
+type flagDTO struct {
 	Key         string        `json:"key"`
 	Description string        `json:"description"`
 	Enabled     bool          `json:"enabled"`
 	Rules       []toggle.Rule `json:"rules"`
 }
 
-func (r flagRequest) flag() toggle.Flag {
-	return toggle.Flag{Key: r.Key, Description: r.Description, Enabled: r.Enabled, Rules: r.Rules}
+func (dto flagDTO) toFlag() toggle.Flag {
+	return toggle.Flag{Key: dto.Key, Description: dto.Description, Enabled: dto.Enabled, Rules: dto.Rules}
 }
 
-type flagResponse struct {
-	Key         string        `json:"key"`
-	Description string        `json:"description"`
-	Enabled     bool          `json:"enabled"`
-	Rules       []toggle.Rule `json:"rules"`
-}
-
-func responseFlag(flag toggle.Flag) flagResponse {
-	return flagResponse{Key: flag.Key, Description: flag.Description, Enabled: flag.Enabled, Rules: flag.Rules}
+func dtoFromFlag(flag toggle.Flag) flagDTO {
+	return flagDTO{Key: flag.Key, Description: flag.Description, Enabled: flag.Enabled, Rules: flag.Rules}
 }
 
 type scopeResponse struct {
@@ -212,9 +192,9 @@ type scopeResponse struct {
 }
 
 type snapshotResponse struct {
-	Scope    scopeResponse  `json:"scope"`
-	Revision int64          `json:"revision"`
-	Flags    []flagResponse `json:"flags"`
+	Scope    scopeResponse `json:"scope"`
+	Revision int64         `json:"revision"`
+	Flags    []flagDTO     `json:"flags"`
 }
 
 type revisionResponse struct {
@@ -287,7 +267,7 @@ func writeError(c *ginframework.Context, err error) {
 	var requestErr requestError
 	switch {
 	case errors.As(err, &requestErr):
-		status, code = requestErr.status, requestErr.code
+		status, code = requestErr.status, requestErr.Error()
 	case errors.Is(err, ErrUnauthenticated):
 		status, code = http.StatusUnauthorized, "unauthenticated"
 	case errors.Is(err, ErrForbidden):

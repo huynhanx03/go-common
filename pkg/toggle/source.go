@@ -1,8 +1,6 @@
 package toggle
 
-import "context"
+import "github.com/huynhanx03/go-common/pkg/toggle/core"
 
 // Source loads one complete consistent snapshot. Implementations must honor ctx.
-type Source interface {
-	Load(context.Context, Scope) (Snapshot, error)
-}
+type Source = core.Source

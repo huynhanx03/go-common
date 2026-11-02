@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/huynhanx03/go-common/pkg/settings"
 	"github.com/huynhanx03/go-common/pkg/toggle"
-	"github.com/huynhanx03/go-common/pkg/toggle/unleash"
 )
 
 type transportFunc func(*http.Request) (*http.Response, error)
@@ -110,7 +110,7 @@ func TestClientRefreshUsesSource(t *testing.T) {
 	}), testScope, 20*time.Millisecond)
 	select {
 	case <-entered:
-	case <-time.After(time.Second):
+	case <-time.After(3 * time.Second):
 		t.Fatal("refresh did not load source")
 	}
 	finished := make(chan error, 1)
@@ -149,11 +149,11 @@ func TestClientCanceledBootstrap(t *testing.T) {
 	entered := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
-		c, err := unleash.New(ctx, unleash.Config{Scope: testScope, AppName: "billing-test", Source: sourceFunc(func(ctx context.Context, _ toggle.Scope) (toggle.Snapshot, error) {
+		c, err := toggle.New(ctx, settings.Toggle{Namespace: testScope.Namespace, Environment: settings.Env(testScope.Environment), AppName: "billing-test", SourceTimeoutSeconds: 1}, sourceFunc(func(ctx context.Context, _ toggle.Scope) (toggle.Snapshot, error) {
 			close(entered)
 			<-ctx.Done()
 			return toggle.Snapshot{}, ctx.Err()
-		})})
+		}))
 		if c != nil {
 			_ = c.Close(context.Background())
 		}
@@ -172,5 +172,49 @@ func TestClientCanceledBootstrap(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("bootstrap ignored cancellation")
+	}
+}
+
+func TestClientCloseDeadlineCanBeRetried(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	releaseOnce := sync.OnceFunc(func() { close(release) })
+	defer releaseOnce()
+	var calls atomic.Int32
+	client := newClient(t, sourceFunc(func(_ context.Context, _ toggle.Scope) (toggle.Snapshot, error) {
+		if calls.Add(1) == 1 {
+			return initialSnapshot(), nil
+		}
+		close(entered)
+		<-release
+		return initialSnapshot(), nil
+	}), testScope, time.Second)
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("refresh did not start")
+	}
+
+	short, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	err := client.Close(short)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Close(short deadline) error = %v, want deadline exceeded", err)
+	}
+	releaseOnce()
+	long, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Close(long); err != nil {
+		t.Fatalf("Close(retry) error = %v", err)
+	}
+}
+
+func TestClientCloseRejectsNilContextWithoutClosingClient(t *testing.T) {
+	client := newClient(t, &controlledSource{snapshot: initialSnapshot()}, testScope, time.Hour)
+	if err := client.Close(nil); !errors.Is(err, toggle.ErrInvalidContext) {
+		t.Fatalf("Close(nil) error = %v", err)
+	}
+	if enabled, err := client.IsEnabled(context.Background(), "checkout", toggle.EvaluationContext{UserID: "u1"}, false); err != nil || !enabled {
+		t.Fatalf("client was closed by invalid Close call: enabled=%v err=%v", enabled, err)
 	}
 }

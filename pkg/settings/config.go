@@ -47,6 +47,21 @@ type Casbin struct {
 	PolicyLimit int    `mapstructure:"policy_limit"` // Zero uses the adapter default.
 }
 
+// DefaultToggleRefreshIntervalSeconds is the SDK's refresh interval when unset.
+const DefaultToggleRefreshIntervalSeconds = 15
+
+// DefaultToggleSourceTimeoutSeconds bounds a source load when unset.
+const DefaultToggleSourceTimeoutSeconds = 5
+
+// Toggle configures local feature flag evaluation for one service scope.
+type Toggle struct {
+	Namespace              string `mapstructure:"namespace"`
+	Environment            Env    `mapstructure:"environment"`
+	AppName                string `mapstructure:"app_name"`
+	RefreshIntervalSeconds int    `mapstructure:"refresh_interval_seconds"` // Zero uses DefaultToggleRefreshIntervalSeconds.
+	SourceTimeoutSeconds   int    `mapstructure:"source_timeout_seconds"`   // Zero uses DefaultToggleSourceTimeoutSeconds.
+}
+
 // Database is the configuration for the database
 type Database struct {
 	Driver          string `mapstructure:"driver"`

@@ -29,6 +29,22 @@ type recordingStore struct {
 	delRevision    int64
 }
 
+// valueStore exercises Store implementations whose concrete value is not a
+// pointer. This is a supported Go interface implementation, not a nil store.
+type valueStore struct{ snapshot toggle.Snapshot }
+
+func (s valueStore) Load(context.Context, toggle.Scope) (toggle.Snapshot, error) {
+	return s.snapshot, nil
+}
+
+func (valueStore) Put(context.Context, toggle.Scope, toggle.Flag, int64) (int64, error) {
+	return 0, nil
+}
+
+func (valueStore) Delete(context.Context, toggle.Scope, string, int64) (int64, error) {
+	return 0, nil
+}
+
 func (s *recordingStore) Load(_ context.Context, _ toggle.Scope) (toggle.Snapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

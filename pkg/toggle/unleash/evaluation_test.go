@@ -2,12 +2,15 @@ package unleash_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/huynhanx03/go-common/pkg/settings"
 	"github.com/huynhanx03/go-common/pkg/toggle"
-	"github.com/huynhanx03/go-common/pkg/toggle/unleash"
+	"github.com/huynhanx03/go-common/pkg/toggle/core"
 )
 
 func TestClientTargetingAndRollout(t *testing.T) {
@@ -146,6 +149,54 @@ func TestClientTargetingAndRollout(t *testing.T) {
 	}
 }
 
+func TestClientRejectsInvalidEvaluationContextsAndClosedVariants(t *testing.T) {
+	client := newEvaluationClient(t, []toggle.Flag{{Key: "checkout", Enabled: true}}, nil)
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	tooManyProperties := make(map[string]string, core.MaxEvaluationProperties+1)
+	for i := 0; i <= core.MaxEvaluationProperties; i++ {
+		tooManyProperties[fmt.Sprintf("property-%d", i)] = "value"
+	}
+	largeValue := strings.Repeat("x", core.MaxContextValueLength+1)
+	cases := []struct {
+		name       string
+		ctx        context.Context
+		key        string
+		evaluation toggle.EvaluationContext
+		want       error
+	}{
+		{name: "nil context", ctx: nil, key: "checkout", want: toggle.ErrInvalidContext},
+		{name: "canceled context", ctx: canceled, key: "checkout", want: context.Canceled},
+		{name: "invalid flag key", ctx: context.Background(), key: "bad key", want: toggle.ErrInvalidContext},
+		{name: "long user id", ctx: context.Background(), key: "checkout", evaluation: toggle.EvaluationContext{UserID: largeValue}, want: toggle.ErrLimit},
+		{name: "long session id", ctx: context.Background(), key: "checkout", evaluation: toggle.EvaluationContext{SessionID: largeValue}, want: toggle.ErrLimit},
+		{name: "long remote address", ctx: context.Background(), key: "checkout", evaluation: toggle.EvaluationContext{RemoteAddress: largeValue}, want: toggle.ErrLimit},
+		{name: "too many properties", ctx: context.Background(), key: "checkout", evaluation: toggle.EvaluationContext{Properties: tooManyProperties}, want: toggle.ErrLimit},
+		{name: "invalid property name", ctx: context.Background(), key: "checkout", evaluation: toggle.EvaluationContext{Properties: map[string]string{"bad name": "value"}}, want: toggle.ErrInvalidContext},
+		{name: "reserved property name", ctx: context.Background(), key: "checkout", evaluation: toggle.EvaluationContext{Properties: map[string]string{"userId": "other"}}, want: toggle.ErrInvalidContext},
+		{name: "long property value", ctx: context.Background(), key: "checkout", evaluation: toggle.EvaluationContext{Properties: map[string]string{"tenant": largeValue}}, want: toggle.ErrLimit},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			enabled, err := client.IsEnabled(test.ctx, test.key, test.evaluation, true)
+			if !enabled || !errors.Is(err, test.want) {
+				t.Fatalf("IsEnabled() = (%v, %v), want fallback true and %v", enabled, err, test.want)
+			}
+			variant, err := client.GetVariant(test.ctx, test.key, test.evaluation)
+			if variant.Name != "disabled" || !errors.Is(err, test.want) {
+				t.Fatalf("GetVariant() = (%+v, %v), want disabled and %v", variant, err, test.want)
+			}
+		})
+	}
+	if err := client.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	variant, err := client.GetVariant(context.Background(), "checkout", toggle.EvaluationContext{})
+	if variant.Name != "disabled" || !errors.Is(err, toggle.ErrClosed) {
+		t.Fatalf("GetVariant() after Close = (%+v, %v), want closed disabled result", variant, err)
+	}
+}
+
 func operatorFlag(key string, constraint toggle.Constraint) toggle.Flag {
 	return toggle.Flag{Key: key, Enabled: true, Rules: []toggle.Rule{{Rollout: 100, Constraints: []toggle.Constraint{constraint}}}}
 }
@@ -157,10 +208,10 @@ func rolloutFlag(key string, rollout int, group, stickiness string) toggle.Flag 
 func newEvaluationClient(t *testing.T, flags []toggle.Flag, onError func(error)) toggle.Client {
 	t.Helper()
 	snapshot := toggle.Snapshot{Scope: testScope, Revision: 1, Flags: flags}
-	client, err := unleash.New(context.Background(), unleash.Config{
-		Scope: testScope, AppName: "evaluation-test", Source: sourceFunc(func(context.Context, toggle.Scope) (toggle.Snapshot, error) { return snapshot, nil }),
-		RefreshInterval: time.Hour, SourceTimeout: time.Second, OnError: onError,
-	})
+	client, err := toggle.New(context.Background(), settings.Toggle{
+		Namespace: testScope.Namespace, Environment: settings.Env(testScope.Environment), AppName: "evaluation-test",
+		RefreshIntervalSeconds: int(time.Hour.Seconds()), SourceTimeoutSeconds: 1,
+	}, sourceFunc(func(context.Context, toggle.Scope) (toggle.Snapshot, error) { return snapshot, nil }), toggle.WithOnError(onError))
 	if err != nil {
 		t.Fatal(err)
 	}
