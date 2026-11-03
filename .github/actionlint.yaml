@@ -1,0 +1,4 @@
+paths:
+  .github/workflows/ai-review.yml:
+    ignore:
+      - 'unknown permission scope "copilot-requests"\.'
