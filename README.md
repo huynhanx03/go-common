@@ -75,6 +75,7 @@ Production-facing packages follow the same rules:
 - [Benchmark operations](docs/benchmarks.md)
 - [Consistent-hash placement](docs/consistenthash.md)
 - [Feature flags and Ent integration](pkg/toggle/README.md)
+- [Versioning, automatic releases, and changelog](docs/releases.md)
 - [Forge embedded queue](pkg/mq/forge/README.md)
 
 ## Repository layout

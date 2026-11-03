@@ -62,6 +62,13 @@ type Toggle struct {
 	SourceTimeoutSeconds   int    `mapstructure:"source_timeout_seconds"`   // Zero uses DefaultToggleSourceTimeoutSeconds.
 }
 
+// I18n configures one domain's lazy locale client. Zero seconds use package defaults.
+type I18n struct {
+	Domain               string `mapstructure:"domain"`
+	CacheTTLSeconds      int    `mapstructure:"cache_ttl_seconds"`
+	SourceTimeoutSeconds int    `mapstructure:"source_timeout_seconds"`
+}
+
 // Database is the configuration for the database
 type Database struct {
 	Driver          string `mapstructure:"driver"`

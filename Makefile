@@ -1,4 +1,4 @@
-.PHONY: benchmarks coverage dependency-check format-check fuzz-seeds test-integration test-race test-unit vet verify workflow-check
+.PHONY: benchmarks coverage dependency-check format-check fuzz-seeds test-integration test-race test-release test-unit vet verify workflow-check
 
 format-check:
 	test -z "$$(gofmt -l $$(find . -name '*.go' -not -path './vendor/*'))"
@@ -19,6 +19,9 @@ test-unit:
 
 test-race:
 	go test -race ./...
+
+test-release:
+	npm --prefix .github/release test
 
 test-integration:
 	go test -tags=integration ./...

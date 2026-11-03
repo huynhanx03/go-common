@@ -15,7 +15,14 @@ while IFS= read -r workflow; do
   grep -Fq 'permissions:' "$workflow" || fail "$(basename "$workflow") has no explicit permissions"
   grep -Fq 'contents: read' "$workflow" || fail "$(basename "$workflow") lacks read-only contents permission"
   ! grep -Fq 'pull_request_target:' "$workflow" || fail "$(basename "$workflow") uses pull_request_target"
-  ! grep -Eq '(^|[[:space:]])(contents|actions|checks|deployments|id-token|packages|pull-requests|security-events|statuses):[[:space:]]+write' "$workflow" ||
+  ! grep -Eq 'permissions:[[:space:]]+write-all' "$workflow" || fail "$(basename "$workflow") grants write-all permissions"
+  # Only the publish job in release.yml may write contents; PR/reusable CI stays read-only.
+  disallowed_permissions="$(awk -v release="$(basename "$workflow")" '
+    /^  [[:alnum:]_-]+:$/ { publish = ($0 == "  publish:") }
+    release == "release.yml" && publish && /^      contents: write$/ { next }
+    { print }
+  ' "$workflow")"
+  ! grep -Eq '(^|[[:space:]])(contents|actions|attestations|checks|deployments|id-token|issues|packages|pull-requests|security-events|statuses):[[:space:]]+write' <<< "$disallowed_permissions" ||
     fail "$(basename "$workflow") grants a write permission"
 
   while IFS= read -r action; do
@@ -33,7 +40,7 @@ done < <(find "$workflow_root" -maxdepth 1 -type f \( -name '*.yml' -o -name '*.
 ci="$workflow_root/ci.yml"
 grep -Fq 'needs: [unit, race, fuzz-seeds, integration]' "$ci" ||
   fail 'CI test overview must wait for all test suites'
-grep -Fq 'needs: [unit, race, fuzz-seeds, integration, test-overview, quality, security]' "$ci" ||
+grep -Fq 'needs: [unit, race, fuzz-seeds, integration, test-overview, quality, security, release-tooling]' "$ci" ||
   fail 'CI required gate dependency graph is incomplete'
 grep -Fq 'if: always()' "$ci" || fail 'CI overview and required gate must observe failed dependencies'
 grep -Fq 'run: make test-integration' "$ci" ||
@@ -41,6 +48,22 @@ grep -Fq 'run: make test-integration' "$ci" ||
 grep -Fq 'uses: gitleaks/gitleaks-action@' "$ci" ||
   fail 'CI must scan the repository for leaked secrets'
 grep -Fq 'govulncheck@' "$ci" || fail 'CI must scan Go dependencies for known vulnerabilities'
+grep -Fq 'workflow_call:' "$ci" || fail 'CI must be reusable by the release workflow'
+grep -Fq 'run: make test-release' "$ci" || fail 'CI must verify release versioning behavior'
+
+release="$workflow_root/release.yml"
+grep -Fq 'branches: [release]' "$release" || fail 'release workflow must target release pushes'
+! grep -Eq '^[[:space:]]*(pull_request|pull_request_target|workflow_run):' "$release" ||
+  fail 'release publication must not be triggered by PRs or another workflow run'
+grep -Fq 'uses: ./.github/workflows/ci.yml' "$release" || fail 'release must reuse CI'
+grep -Fq 'needs: [verify]' "$release" || fail 'publication must depend on successful CI'
+grep -Fq "if: github.event_name == 'push' && github.ref == 'refs/heads/release'" "$release" ||
+  fail 'publication must be limited to release branch pushes'
+grep -Fq 'cancel-in-progress: false' "$release" || fail 'active releases must not be cancelled by newer pushes'
+grep -Fq 'fetch-depth: 0' "$release" || fail 'release must fetch all history and tags'
+grep -Fq 'ref: ${{ github.sha }}' "$release" || fail 'release must publish the verified commit'
+[[ "$(grep -Ec '^      contents: write$' "$release" || true)" -eq 1 ]] ||
+  fail 'release must grant contents-write exactly once, in the publish job'
 
 benchmark="$workflow_root/main.yml"
 grep -Fq 'branches: [main]' "$benchmark" || fail 'benchmark workflow must run on main pushes only'
