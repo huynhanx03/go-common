@@ -246,7 +246,7 @@ func TestGinManagementAPIRejectsUnconditionalStaleAndNonStrictWrites(t *testing.
 type failingBody struct{}
 
 func (failingBody) Read([]byte) (int, error) { return 0, errors.New("request stream failed") }
-func (failingBody) Close() error            { return nil }
+func (failingBody) Close() error             { return nil }
 
 func TestGinManagementAPIRejectsRequestReadFailuresAndInvalidScopes(t *testing.T) {
 	gin.SetMode(gin.TestMode)

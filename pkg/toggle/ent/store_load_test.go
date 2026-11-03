@@ -39,8 +39,8 @@ func (d *loadDriver) Query(_ context.Context, _ string, _ any, destination any) 
 	return nil
 }
 func (*loadDriver) Tx(context.Context) (dialect.Tx, error) { return nil, nil }
-func (*loadDriver) Close() error                          { return nil }
-func (*loadDriver) Dialect() string                       { return dialect.Postgres }
+func (*loadDriver) Close() error                           { return nil }
+func (*loadDriver) Dialect() string                        { return dialect.Postgres }
 
 type loadRow struct {
 	revision        int64
@@ -56,11 +56,11 @@ type loadRow struct {
 func validLoadRow(revision int64, key string) loadRow {
 	definition := `{"schema_version":1,"rules":[]}`
 	return loadRow{
-		revision: revision,
-		key: sql.NullString{String: key, Valid: true},
-		description: sql.NullString{Valid: true},
-		enabled: sql.NullBool{Valid: true},
-		definition: sql.NullString{String: definition, Valid: true},
+		revision:        revision,
+		key:             sql.NullString{String: key, Valid: true},
+		description:     sql.NullString{Valid: true},
+		enabled:         sql.NullBool{Valid: true},
+		definition:      sql.NullString{String: definition, Valid: true},
 		definitionBytes: sql.NullInt64{Int64: int64(len(definition)), Valid: true},
 	}
 }

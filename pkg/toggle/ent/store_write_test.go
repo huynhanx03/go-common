@@ -28,23 +28,23 @@ func (*writeDriver) Close() error                             { return nil }
 func (*writeDriver) Dialect() string                          { return dialect.Postgres }
 
 type writeTx struct {
-	queryFailure       string
-	queryErr           error
-	rows               []loadRow
-	rowsErr            error
-	scanErr            error
-	closeErr           error
-	execFailure        string
-	execErr            error
-	nilResult          bool
-	claimAffected      int64
-	claimRowsErr       error
-	deleteAffected     int64
-	deleteRowsErr      error
-	commitErr          error
-	rollbackErr        error
-	commits            int
-	rollbacks          int
+	queryFailure   string
+	queryErr       error
+	rows           []loadRow
+	rowsErr        error
+	scanErr        error
+	closeErr       error
+	execFailure    string
+	execErr        error
+	nilResult      bool
+	claimAffected  int64
+	claimRowsErr   error
+	deleteAffected int64
+	deleteRowsErr  error
+	commitErr      error
+	rollbackErr    error
+	commits        int
+	rollbacks      int
 }
 
 func (tx *writeTx) Exec(_ context.Context, query string, _ any, destination any) error {
@@ -139,7 +139,9 @@ func TestStorePutClaimsRevisionAndRollsBackFailedWrites(t *testing.T) {
 		{name: "flag insert failure", configure: func(d *writeDriver) { d.tx.execFailure, d.tx.execErr = "INSERT INTO toggle_flags", backendErr }, want: backendErr, fail: true},
 		{name: "driver omits SQL result", configure: func(d *writeDriver) { d.tx.nilResult = true }, fail: true},
 		{name: "commit failure", configure: func(d *writeDriver) { d.tx.commitErr = backendErr }, want: backendErr, fail: true},
-		{name: "rollback failure is retained", configure: func(d *writeDriver) { d.tx.execFailure, d.tx.execErr, d.tx.rollbackErr = "INSERT INTO toggle_flags", backendErr, rollbackErr }, want: backendErr, fail: true, rollback: rollbackErr},
+		{name: "rollback failure is retained", configure: func(d *writeDriver) {
+			d.tx.execFailure, d.tx.execErr, d.tx.rollbackErr = "INSERT INTO toggle_flags", backendErr, rollbackErr
+		}, want: backendErr, fail: true, rollback: rollbackErr},
 		{name: "invalid flag is rejected before transaction", flag: toggle.Flag{Key: "bad key"}, want: toggle.ErrInvalidDefinition, fail: true},
 	}
 	for _, test := range cases {

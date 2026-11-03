@@ -192,9 +192,9 @@ func TestNormalizeFlagRejectsInvalidRulesAndResourceLimits(t *testing.T) {
 func TestNormalizeSnapshotRejectsInvalidScopeAndRevision(t *testing.T) {
 	scope := Scope{Namespace: "billing", Environment: "prod"}
 	cases := []struct {
-		name     string
+		name      string
 		requested Scope
-		snapshot Snapshot
+		snapshot  Snapshot
 	}{
 		{name: "invalid requested scope", requested: Scope{Environment: "prod"}, snapshot: Snapshot{Scope: scope, Revision: 1}},
 		{name: "source scope mismatch", requested: scope, snapshot: Snapshot{Scope: Scope{Namespace: "other", Environment: "prod"}, Revision: 1}},
