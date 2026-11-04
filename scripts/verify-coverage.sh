@@ -107,7 +107,7 @@ if [[ -n "$report_file" ]]; then
               else "unknown"
               end
             ),
-            test_count: ([$package_events[] | select(.Test != null and .Action == "pass")] | length),
+            passed_count: ([$package_events[] | select(.Test != null and .Action == "pass")] | length),
             has_tests: any($package_events[]; .Test != null),
             elapsed_seconds: (
               [$package_events[] | select(.Test == null and (.Action == "pass" or .Action == "fail") and .Elapsed != null) | .Elapsed]
@@ -121,14 +121,16 @@ if [[ -n "$report_file" ]]; then
       ] as $package_results
     | {
         package_count: ($packages | length),
-        test_count: ([$events[] | select(.Test != null and .Action == "pass")] | length),
+        test_event_count: ([$events[] | select(.Test != null and (.Action == "pass" or .Action == "fail" or .Action == "skip"))] | length),
+        passed_count: ([$events[] | select(.Test != null and .Action == "pass")] | length),
         failed_count: ([$events[] | select(.Test != null and .Action == "fail")] | length),
+        skipped_count: ([$events[] | select(.Test != null and .Action == "skip")] | length),
         failed_packages: [
           $packages[] as $package
           | select(any($events[]; .Package == $package and .Action == "fail" and .Test == null))
         ],
         packages: $package_results,
-        slowest_packages: ($package_results | sort_by(.elapsed_seconds) | reverse | .[:10]),
+        slowest_packages: ($package_results | map(select(.elapsed_seconds > 0)) | sort_by(.elapsed_seconds) | reverse | .[:10]),
         slowest_tests: [
           $events[]
           | select(.Test != null and (.Action == "pass" or .Action == "fail") and .Elapsed != null and .Elapsed > 0)

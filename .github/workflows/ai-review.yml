@@ -40,7 +40,12 @@ jobs:
               map(. + {
                 duration_seconds: (
                   if .started_at == null or .completed_at == null then null
-                  else (try ((.completed_at | fromdateiso8601) - (.started_at | fromdateiso8601)) catch null)
+                  else (
+                    try (
+                      ((.completed_at | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) -
+                       (.started_at | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601))
+                    ) catch null
+                  )
                   end
                 )
               } | del(.started_at, .completed_at))
@@ -86,7 +91,7 @@ jobs:
           Cover all sections below, using measured details and concise tables/lists. Aim for 400–700 words when the report contains enough data; be shorter only when the evidence is sparse.
           1. Overall CI result: state success/failure and the most important reason.
           2. Checks and duration: table the test, quality, security, and required-gate results with job duration_seconds when available. Do not list every passing step separately.
-          3. Tests: report package/test-event totals, failures by exact package and test name, and the slowest packages/test cases with measured times. Explain likely causes only when failed_log_excerpt supports them.
+          3. Tests: report package count and test-event total with passed, failed, and skipped counts; list failures by exact package and test name, and the slowest packages/test cases with measured times. Explain likely causes only when failed_log_excerpt supports them.
           4. Coverage: compare total_percent with minimum_percent, call out the lowest-coverage packages and functions, and propose test follow-ups tied to those names. Treat packages with no tests as such; do not imply their 0% is a regression.
           5. Benchmarks: interpret only the base-vs-PR benchstat comparison. Report the most important statistically significant changes for sec/op, B/op, or allocs/op with benchmark name, direction, percentage, and p-value. Treat '~' as no statistically significant change, and new/unmatched benchmarks as not comparable. If comparison_available is false, explain unavailable_reason and make no performance regression claim.
           Benchmark comparisons cover many cases, so treat small isolated significant changes cautiously and prioritize changes with meaningful effect sizes or consistent evidence across metrics.

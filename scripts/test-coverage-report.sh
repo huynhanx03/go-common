@@ -22,8 +22,10 @@ fi
 if ! jq -e '
   .tests.status == "success" and
   .tests.package_count == 2 and
-  .tests.test_count > 0 and
+  .tests.test_event_count > 0 and
+  .tests.passed_count > 0 and
   .tests.failed_count == 0 and
+  (.tests.passed_count + .tests.failed_count + .tests.skipped_count) == .tests.test_event_count and
   (.tests.slowest_tests | type) == "array" and
   (.tests.slowest_packages | length) == 2 and
   .tests.slowest_packages[0].elapsed_seconds > 0 and
