@@ -233,8 +233,8 @@ jobs:
             fi
           done
 
-  ci-report:
-    name: CI report artifact
+  pr-check-summary:
+    name: Prepare PR check summary
     if: ${{ always() && github.event_name == 'pull_request' }}
     continue-on-error: true
     needs: [unit, race, fuzz-seeds, integration, benchmark, test-overview, quality, security, gate]
@@ -272,12 +272,12 @@ jobs:
             --arg benchmark_report "$BENCHMARK_REPORT" \
             --arg run_url "$RUN_URL" \
             '{checks: {unit: $unit, race: $race, fuzz_seeds: $fuzz, integration: $integration, benchmarks: $benchmark, test_overview: $overview, quality: $quality, security: $security, required_gate: $gate}, coverage: {total_percent: $coverage, minimum_percent: $minimum_coverage}, benchmark_output: $benchmark_report, workflow_run: $run_url}' \
-            > "$RUNNER_TEMP/ci-report.json"
+            > "$RUNNER_TEMP/pr-check-summary.json"
 
-      - name: Upload CI report
+      - name: Upload PR check summary
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: go-common-ai-ci-report
-          path: ${{ runner.temp }}/ci-report.json
+          name: pr-check-summary
+          path: ${{ runner.temp }}/pr-check-summary.json
           if-no-files-found: error
           retention-days: 1
