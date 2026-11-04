@@ -20,6 +20,9 @@ while IFS= read -r workflow; do
   disallowed_permissions="$(awk -v release="$(basename "$workflow")" '
     /^  [[:alnum:]_-]+:$/ { publish = ($0 == "  publish:") }
     release == "release.yml" && publish && /^      contents: write$/ { next }
+    release == "release-preview.yml" && /^  preview:$/ { preview = 1; next }
+    preview && /^  [[:alnum:]_-]+:$/ { preview = 0 }
+    release == "release-preview.yml" && preview && /^      pull-requests: write$/ { next }
     release == "ai-review.yml" && /^  ai-review:$/ { ai_review = 1; next }
     ai_review && /^  [[:alnum:]_-]+:$/ { ai_review = 0 }
     release == "ai-review.yml" && ai_review && /^      (copilot-requests|pull-requests): write$/ { next }
@@ -78,8 +81,12 @@ grep -Fq 'pull-requests: write' "$workflow_root/ai-review.yml" ||
   fail 'AI CI review must be able to comment on pull requests'
 ! grep -Fq 'actions/checkout@' "$workflow_root/ai-review.yml" ||
   fail 'AI CI review must not check out pull request code'
-grep -Fq 'gh run download "$RUN_ID" --name pr-check-summary' "$workflow_root/ai-review.yml" ||
-  fail 'AI PR review must download the PR check summary artifact'
+grep -Fq 'gh run download "$RUN_ID" --repo "$REPOSITORY" --name pr-check-summary' "$workflow_root/ai-review.yml" ||
+  fail 'AI PR review must download the PR summary without requiring a local Git checkout'
+grep -Fq 'gh run view "$RUN_ID" --repo "$REPOSITORY" --json' "$workflow_root/ai-review.yml" ||
+  fail 'AI PR review must fetch run details without requiring a local Git checkout'
+grep -Fq 'gh run view "$RUN_ID" --repo "$REPOSITORY" --log-failed' "$workflow_root/ai-review.yml" ||
+  fail 'AI PR review must fetch failed logs without requiring a local Git checkout'
 grep -Fq 'copilot -p ' "$workflow_root/ai-review.yml" ||
   fail 'AI CI review must use GitHub Copilot CLI'
 grep -Fq -- '--no-ask-user' "$workflow_root/ai-review.yml" ||
@@ -101,6 +108,17 @@ grep -Fq 'fetch-depth: 0' "$release" || fail 'release must fetch all history and
 grep -Fq 'ref: ${{ github.sha }}' "$release" || fail 'release must publish the verified commit'
 [[ "$(grep -Ec '^      contents: write$' "$release" || true)" -eq 1 ]] ||
   fail 'release must grant contents-write exactly once, in the publish job'
+
+release_preview="$workflow_root/release-preview.yml"
+grep -Fq 'pull_request:' "$release_preview" || fail 'release preview must run on pull requests'
+grep -Fq 'branches: [release]' "$release_preview" || fail 'release preview must target PRs into release'
+grep -Fq 'pull-requests: write' "$release_preview" || fail 'release preview must be able to comment on PRs'
+grep -Fq 'node .github/release/release-preview.mjs' "$release_preview" ||
+  fail 'release preview must use the shared release-notes generator'
+grep -Fq '<!-- go-common-release-preview -->' "$release_preview" ||
+  fail 'release preview must update its existing PR comment'
+! grep -Fq 'contents: write' "$release_preview" ||
+  fail 'release preview must not be able to publish releases'
 
 benchmark="$workflow_root/main.yml"
 grep -Fq 'branches: [main]' "$benchmark" || fail 'benchmark workflow must run on main pushes only'

@@ -25,36 +25,38 @@ const notesOptions = {
   },
 };
 
+export const releasePlugin = {
+  async analyzeCommits(_options, context) {
+    const type = await analyzeCommits({
+      preset,
+      releaseRules: [
+        { breaking: true, release: "major" },
+        { type: "feature", release: "minor" },
+      ],
+    }, context);
+    // Every new change on release gets a version, including docs/CI/raw commits.
+    return type ?? (context.commits.length > 0 ? "patch" : null);
+  },
+  async verifyRelease(_options, { cwd, nextRelease }) {
+    const source = await readFile(join(cwd, "go.mod"), "utf8");
+    const actual = source.match(/^module\s+"?([^"\s]+)"?/m)?.[1];
+    const expected = moduleFor(nextRelease.version);
+    if (actual !== expected) {
+      throw new Error(`Refusing ${nextRelease.gitTag}: go.mod must declare module ${expected}; found ${actual ?? "no module directive"}. Prepare the Go import migration before releasing.`);
+    }
+  },
+  async generateNotes(_options, context) {
+    const notes = await generateNotes(notesOptions, context);
+    const { version, gitTag } = context.nextRelease;
+    return `${notes}\n### Upgrade\n\n\`\`\`sh\ngo get ${moduleFor(version)}@${gitTag}\ngo mod tidy\ngo test ./...\n\`\`\`\n`;
+  },
+};
+
 export default {
   branches: ["release"],
   tagFormat: "v${version}",
   plugins: [
-    {
-      async analyzeCommits(_options, context) {
-        const type = await analyzeCommits({
-          preset,
-          releaseRules: [
-            { breaking: true, release: "major" },
-            { type: "feature", release: "minor" },
-          ],
-        }, context);
-        // Every new change on release gets a version, including docs/CI/raw commits.
-        return type ?? (context.commits.length > 0 ? "patch" : null);
-      },
-      async verifyRelease(_options, { cwd, nextRelease }) {
-        const source = await readFile(join(cwd, "go.mod"), "utf8");
-        const actual = source.match(/^module\s+"?([^"\s]+)"?/m)?.[1];
-        const expected = moduleFor(nextRelease.version);
-        if (actual !== expected) {
-          throw new Error(`Refusing ${nextRelease.gitTag}: go.mod must declare module ${expected}; found ${actual ?? "no module directive"}. Prepare the Go import migration before releasing.`);
-        }
-      },
-      async generateNotes(_options, context) {
-        const notes = await generateNotes(notesOptions, context);
-        const { version, gitTag } = context.nextRelease;
-        return `${notes}\n### Upgrade\n\n\`\`\`sh\ngo get ${moduleFor(version)}@${gitTag}\ngo mod tidy\ngo test ./...\n\`\`\`\n`;
-      },
-    },
+    releasePlugin,
     [fileURLToPath(import.meta.resolve("@semantic-release/github")), {
       successCommentCondition: false,
       failCommentCondition: false,
