@@ -56,7 +56,7 @@ jobs:
               printf '%s\n' 'No release is expected from the current PR commits.'
             else
               version="$(jq -r '.version' "$PREVIEW_FILE")"
-              printf 'Expected version: `%s`\n\n' "$version"
+              printf '%s\n\n' "Expected version: \`$version\`"
               jq -r '.notes' "$PREVIEW_FILE"
             fi
           } > "$comment_file"
