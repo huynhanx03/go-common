@@ -34,7 +34,7 @@ jobs:
           mkdir -p "$report_dir"
 
           artifact_size="$(gh api "repos/$REPOSITORY/actions/runs/$RUN_ID/artifacts" \
-            --jq '.artifacts[] | select(.name == "pr-check-summary") | .size_in_bytes' 2>/dev/null | awk 'NR == 1 { first = $0 } END { print first }' || true)"
+            --jq '.artifacts[] | select(.name == "pr-check-summary") | .size_in_bytes' 2>/dev/null | sed -n '1p' || true)"
           report_file="$report_dir/pr-check-summary.json"
           if [[ "$artifact_size" =~ ^[0-9]+$ ]] && (( artifact_size <= 100000 )); then
             gh run download "$RUN_ID" --repo "$REPOSITORY" --name pr-check-summary --dir "$report_dir" 2>/dev/null || true
@@ -99,7 +99,7 @@ jobs:
           } > "$comment_file"
 
           comments_endpoint="repos/$REPOSITORY/issues/$PR_NUMBER/comments"
-          comment_id="$(gh api --paginate "$comments_endpoint" --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- go-common-ai-ci-review -->"))) | .id' | awk 'NR == 1 { first = $0 } END { print first }')"
+          comment_id="$(gh api --paginate "$comments_endpoint" --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- go-common-ai-ci-review -->"))) | .id' | sed -n '1p')"
           if [[ -n "$comment_id" ]]; then
             gh api --method PATCH "repos/$REPOSITORY/issues/comments/$comment_id" -f body="$(cat "$comment_file")" > /dev/null
           else
