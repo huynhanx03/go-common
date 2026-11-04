@@ -13,6 +13,7 @@ dependency-check:
 workflow-check:
 	go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
 	./scripts/verify-workflows.sh
+	./scripts/test-coverage-report.sh
 
 test-unit:
 	go test ./...
@@ -30,6 +31,6 @@ coverage:
 	./scripts/verify-coverage.sh
 
 benchmarks:
-	go test -tags=benchmark -run=^$$ -bench=. -benchmem -count=5 ./...
+	go test -tags=benchmark -run=^$$ -bench=. -benchmem -benchtime=500ms -count=10 ./...
 
 verify: format-check vet dependency-check workflow-check test-unit fuzz-seeds
