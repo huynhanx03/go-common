@@ -55,8 +55,10 @@ grep -Fq 'uses: gitleaks/gitleaks-action@' "$ci" ||
   fail 'CI must scan the repository for leaked secrets'
 grep -Fq 'govulncheck@' "$ci" || fail 'CI must scan Go dependencies for known vulnerabilities'
 grep -Fq 'workflow_call:' "$ci" || fail 'CI must be reusable by the release workflow'
-grep -Fq 'make benchmarks > "$log_file"' "$ci" ||
+grep -Fq 'make benchmarks > "$pr_log"' "$ci" ||
   fail 'CI must run benchmarks'
+grep -Fq 'go install golang.org/x/perf/cmd/benchstat@latest' "$ci" ||
+  fail 'PR benchmarks must use benchstat for a statistical comparison'
 grep -Fq 'BENCHMARK_RESULT: ${{ needs.benchmark.result }}' "$ci" ||
   fail 'CI report and required gate must observe the benchmark result'
 grep -Fq '"$BENCHMARK_RESULT"' "$ci" ||
