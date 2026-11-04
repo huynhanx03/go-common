@@ -1,6 +1,7 @@
 package json_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -27,6 +28,7 @@ func TestUnmarshalStrictRejectsAmbiguousDocuments(t *testing.T) {
 
 	for _, document := range []string{
 		`{"name":"one","name":"two","data":{}}`,
+		`{"name":"one","\u006eame":"two","data":{}}`,
 		`{"name":"one","data":{"key":1,"key":2}}`,
 		`{"name":"one","unknown":true,"data":{}}`,
 		`{"name":"one","data":{}}{"name":"two","data":{}}`,
@@ -54,5 +56,45 @@ func TestUnmarshalStrictValidatesArgumentsAndUTF8(t *testing.T) {
 	invalidUTF8 := []byte{'{', '"', 'v', 'a', 'l', 'u', 'e', '"', ':', '"', 0xff, '"', '}'}
 	if err := commonjson.UnmarshalStrict(invalidUTF8, &target); err == nil {
 		t.Fatal("invalid UTF-8 error = nil")
+	}
+}
+
+func TestUnmarshalStrictMatchesStructFieldNamesExactly(t *testing.T) {
+	t.Parallel()
+
+	var target struct {
+		Name string `json:"name"`
+	}
+	if err := commonjson.UnmarshalStrict([]byte(`{"NAME":"case mismatch"}`), &target); err == nil {
+		t.Fatal("case-mismatched field error = nil")
+	}
+
+	if err := commonjson.UnmarshalStrict(
+		[]byte(`{"name":"`+strings.Repeat("[", 129)+`literal contains ] } and an escaped quote: \\\""}`),
+		&target,
+	); err != nil {
+		t.Fatalf("UnmarshalStrict with delimiters in string: %v", err)
+	}
+}
+
+func TestUnmarshalStrictLimitEnforcesByteBudget(t *testing.T) {
+	t.Parallel()
+
+	data := []byte(`{"value":"ok"}`)
+	var target struct {
+		Value string `json:"value"`
+	}
+	if err := commonjson.UnmarshalStrictLimit(data, &target, len(data)); err != nil {
+		t.Fatalf("document at byte limit: %v", err)
+	}
+
+	for _, maximum := range []int{
+		len(data) - 1,
+		0,
+		commonjson.HardStrictMaxBytes + 1,
+	} {
+		if err := commonjson.UnmarshalStrictLimit(data, &target, maximum); !errors.Is(err, commonjson.ErrInvalidDocument) {
+			t.Errorf("maximum %d error = %v, want ErrInvalidDocument", maximum, err)
+		}
 	}
 }

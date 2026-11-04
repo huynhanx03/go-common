@@ -16,7 +16,7 @@ env:
 
 jobs:
   benchmark:
-    name: Benchmark baseline
+    name: Benchmarks
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -28,11 +28,5 @@ jobs:
           go-version-file: go.mod
           cache: true
       - run: go mod download
-      - name: Capture benchmark matrix
-        run: make benchmarks | tee benchmark.txt
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: go-common-benchmark-${{ github.sha }}
-          path: benchmark.txt
-          if-no-files-found: error
-          retention-days: 90
+      - name: Run benchmarks
+        run: make benchmarks

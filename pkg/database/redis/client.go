@@ -12,7 +12,7 @@ import (
 
 	"github.com/huynhanx03/go-common/pkg/common/cache"
 	"github.com/huynhanx03/go-common/pkg/settings"
-	"github.com/huynhanx03/go-common/pkg/utils"
+	"github.com/huynhanx03/go-common/pkg/timer"
 )
 
 const (
@@ -25,6 +25,8 @@ const (
 	defaultMaxRetries      = 3
 	defaultMinRetryBackoff = 300
 	defaultMaxRetryBackoff = 500
+	maxPoolSize            = 1_000_000
+	maxTimeoutSeconds      = 86_400
 )
 
 type RedisEngine struct {
@@ -62,8 +64,8 @@ func NewConnection(cfg *settings.Redis) (*RedisEngine, error) {
 
 func (r *RedisEngine) connect() error {
 	r.setDefaultConfig()
-	if err := r.config.Validate(); err != nil {
-		return errors.Join(ErrInvalidConfig, err)
+	if err := validateConfig(*r.config); err != nil {
+		return err
 	}
 
 	r.client = redisV9.NewUniversalClient(&redisV9.UniversalOptions{
@@ -74,12 +76,12 @@ func (r *RedisEngine) connect() error {
 		PoolSize:        r.config.PoolSize,
 		MinIdleConns:    r.config.MinIdleConns,
 		MaxRetries:      r.config.MaxRetries,
-		DialTimeout:     utils.ToDuration(r.config.DialTimeout),
-		ReadTimeout:     utils.ToDuration(r.config.ReadTimeout),
-		WriteTimeout:    utils.ToDuration(r.config.WriteTimeout),
-		PoolTimeout:     utils.ToDuration(r.config.PoolTimeout),
-		MinRetryBackoff: utils.ToDurationMs(r.config.MinRetryBackoff),
-		MaxRetryBackoff: utils.ToDurationMs(r.config.MaxRetryBackoff),
+		DialTimeout:     timer.ToDuration(r.config.DialTimeout),
+		ReadTimeout:     timer.ToDuration(r.config.ReadTimeout),
+		WriteTimeout:    timer.ToDuration(r.config.WriteTimeout),
+		PoolTimeout:     timer.ToDuration(r.config.PoolTimeout),
+		MinRetryBackoff: timer.ToDurationMs(r.config.MinRetryBackoff),
+		MaxRetryBackoff: timer.ToDurationMs(r.config.MaxRetryBackoff),
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -87,6 +89,33 @@ func (r *RedisEngine) connect() error {
 	if err := r.client.Ping(ctx).Err(); err != nil {
 		_ = r.client.Close()
 		return errors.Join(ErrPingFailed, fmt.Errorf("ping Redis: %w", err))
+	}
+	return nil
+}
+
+func validateConfig(config settings.Redis) error {
+	if len(config.Addrs) == 0 {
+		return ErrInvalidConfig
+	}
+	for _, address := range config.Addrs {
+		if strings.TrimSpace(address) == "" {
+			return ErrInvalidConfig
+		}
+	}
+	if config.Database < 0 ||
+		config.PoolSize <= 0 || config.PoolSize > maxPoolSize ||
+		config.MinIdleConns < 0 || config.MinIdleConns > config.PoolSize {
+		return ErrInvalidConfig
+	}
+	if config.PoolTimeout <= 0 || config.PoolTimeout > maxTimeoutSeconds ||
+		config.DialTimeout <= 0 || config.DialTimeout > maxTimeoutSeconds ||
+		config.ReadTimeout <= 0 || config.ReadTimeout > maxTimeoutSeconds ||
+		config.WriteTimeout <= 0 || config.WriteTimeout > maxTimeoutSeconds {
+		return ErrInvalidConfig
+	}
+	if config.MaxRetries < 0 || config.MinRetryBackoff <= 0 ||
+		config.MaxRetryBackoff < config.MinRetryBackoff {
+		return ErrInvalidConfig
 	}
 	return nil
 }

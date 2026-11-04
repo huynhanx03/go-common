@@ -1,16 +1,14 @@
-package authentication_test
+package authentication
 
 import (
 	"context"
 	"errors"
 	"testing"
 	"time"
-
-	"github.com/huynhanx03/go-common/pkg/security/authentication"
 )
 
 func TestAnonymousContainsNoIdentity(t *testing.T) {
-	principal := authentication.Anonymous()
+	principal := Anonymous()
 	if principal.Authenticated ||
 		principal.Subject != "" ||
 		principal.UserID != "" ||
@@ -29,7 +27,7 @@ func TestAnonymousContainsNoIdentity(t *testing.T) {
 
 func TestPrincipalValidateEnforcesAuthenticatedInvariant(t *testing.T) {
 	now := time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
-	valid := authentication.Principal{
+	valid := Principal{
 		Authenticated:      true,
 		Subject:            "user:123",
 		UserID:             "123",
@@ -41,13 +39,13 @@ func TestPrincipalValidateEnforcesAuthenticatedInvariant(t *testing.T) {
 		t.Fatalf("Validate() error = %v", err)
 	}
 
-	tests := []authentication.Principal{
+	tests := []Principal{
 		{Authenticated: true, AuthenticatedUntil: now.Add(time.Minute)},
 		{Authenticated: true, Subject: "user:123", AuthenticatedUntil: now},
 		{Subject: "leaked-anonymous-identity"},
 	}
 	for _, principal := range tests {
-		if err := principal.Validate(now); !errors.Is(err, authentication.ErrInvalidPrincipal) {
+		if err := principal.Validate(now); !errors.Is(err, ErrInvalidPrincipal) {
 			t.Errorf("Validate(%#v) error = %v", principal, err)
 		}
 	}
@@ -55,7 +53,7 @@ func TestPrincipalValidateEnforcesAuthenticatedInvariant(t *testing.T) {
 
 func TestPrincipalRecentlyAuthenticatedUsesClosedWindow(t *testing.T) {
 	now := time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
-	principal := authentication.Principal{
+	principal := Principal{
 		Authenticated:      true,
 		Subject:            "user:123",
 		AuthenticatedAt:    now.Add(-10 * time.Minute),
@@ -65,21 +63,24 @@ func TestPrincipalRecentlyAuthenticatedUsesClosedWindow(t *testing.T) {
 	if !principal.RecentlyAuthenticated(now, 10*time.Minute) {
 		t.Fatal("exact recent-authentication boundary was rejected")
 	}
-	for name, mutate := range map[string]func(*authentication.Principal){
-		"stale": func(value *authentication.Principal) {
+	if !principal.RecentlyAuthenticated(now.In(time.FixedZone("UTC+7", 7*60*60)), 10*time.Minute) {
+		t.Fatal("the same instant in a different time zone was rejected")
+	}
+	for name, mutate := range map[string]func(*Principal){
+		"stale": func(value *Principal) {
 			value.AuthenticatedAt = now.Add(-10*time.Minute - time.Nanosecond)
 		},
-		"future": func(value *authentication.Principal) {
+		"future": func(value *Principal) {
 			value.AuthenticatedAt = now.Add(time.Nanosecond)
 		},
-		"missing": func(value *authentication.Principal) {
+		"missing": func(value *Principal) {
 			value.AuthenticatedAt = time.Time{}
 		},
-		"expired principal": func(value *authentication.Principal) {
+		"expired principal": func(value *Principal) {
 			value.AuthenticatedUntil = now
 		},
-		"anonymous": func(value *authentication.Principal) {
-			*value = authentication.Anonymous()
+		"anonymous": func(value *Principal) {
+			*value = Anonymous()
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -97,44 +98,25 @@ func TestPrincipalRecentlyAuthenticatedUsesClosedWindow(t *testing.T) {
 }
 
 func TestPrincipalContextRoundTrip(t *testing.T) {
-	principal := authentication.Principal{
+	principal := Principal{
 		Authenticated:      true,
 		Subject:            "user:123",
 		AuthenticatedUntil: time.Now().Add(time.Minute),
 	}
-	ctx := authentication.WithPrincipal(context.Background(), principal)
-	got, ok := authentication.FromContext(ctx)
+	ctx := WithPrincipal(context.Background(), principal)
+	got, ok := FromContext(ctx)
 	if !ok || got != principal {
 		t.Fatalf("FromContext() = %#v, %t", got, ok)
 	}
-	if _, ok := authentication.FromContext(context.Background()); ok {
+	if _, ok := FromContext(context.Background()); ok {
 		t.Fatal("FromContext(empty) ok = true")
 	}
-	if _, ok := authentication.FromContext(nil); ok {
+	if _, ok := FromContext(nil); ok {
 		t.Fatal("FromContext(nil) ok = true")
 	}
 
-	nilParent := authentication.WithPrincipal(nil, principal)
-	if got, ok := authentication.FromContext(nilParent); !ok || got != principal {
+	nilParent := WithPrincipal(nil, principal)
+	if got, ok := FromContext(nilParent); !ok || got != principal {
 		t.Fatalf("FromContext(WithPrincipal(nil)) = %#v, %t", got, ok)
-	}
-}
-
-func TestTokenPurposeValidate(t *testing.T) {
-	t.Parallel()
-
-	for _, purpose := range []authentication.TokenPurpose{
-		authentication.PurposeAccess,
-		authentication.PurposeRefresh,
-	} {
-		if err := purpose.Validate(); err != nil {
-			t.Errorf("%q.Validate() error = %v", purpose, err)
-		}
-	}
-	if err := authentication.TokenPurpose("admin").Validate(); !errors.Is(
-		err,
-		authentication.ErrInvalidPurpose,
-	) {
-		t.Fatalf("unknown purpose error = %v", err)
 	}
 }

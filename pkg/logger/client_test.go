@@ -50,51 +50,80 @@ func TestNewLoggerWritesConfiguredStructuredOutput(t *testing.T) {
 
 func TestNewLoggerSelectsDevAndProductionLevels(t *testing.T) {
 	for _, test := range []struct {
-		mode settings.Env
-		want zapcore.Level
+		name   string
+		config LoggerConfig
+		want   zapcore.Level
 	}{
-		{settings.EnvDev, zapcore.DebugLevel},
-		{settings.EnvStaging, zapcore.InfoLevel},
+		{"default mode", LoggerConfig{}, zapcore.DebugLevel},
+		{"development", LoggerConfig{Mode: settings.EnvDev}, zapcore.DebugLevel},
+		{"staging", LoggerConfig{Mode: settings.EnvStaging}, zapcore.InfoLevel},
+		{"production", LoggerConfig{Mode: settings.EnvProd}, zapcore.InfoLevel},
 	} {
-		log, err := NewLogger(LoggerConfig{Mode: test.mode})
-		if err != nil {
-			t.Fatalf("NewLogger(%q): %v", test.mode, err)
-		}
-		if got := log.Level(); got != test.want {
-			t.Errorf("Level() for %q = %v, want %v", test.mode, got, test.want)
-		}
+		t.Run(test.name, func(t *testing.T) {
+			log, err := NewLogger(test.config)
+			if err != nil {
+				t.Fatalf("NewLogger(): %v", err)
+			}
+			if got := log.Level(); got != test.want {
+				t.Errorf("Level() = %v, want %v", got, test.want)
+			}
+		})
 	}
 }
 
-func TestNewLoggerRejectsInvalidConfigAndFilePaths(t *testing.T) {
-	if _, err := NewLogger(LoggerConfig{MaxSize: -1}); !errors.Is(err, ErrInvalidConfig) {
-		t.Fatalf("invalid config error = %v, want ErrInvalidConfig", err)
+func TestNewLoggerRejectsInvalidConfiguration(t *testing.T) {
+	tests := []struct {
+		name   string
+		change func(*LoggerConfig)
+	}{
+		{"negative rotation size", func(c *LoggerConfig) { c.MaxSize = -1 }},
+		{"invalid level", func(c *LoggerConfig) { c.Level = "not-a-level" }},
 	}
-	if _, err := NewLogger(LoggerConfig{Level: "not-a-zap-level"}); !errors.Is(err, ErrInvalidConfig) {
-		t.Fatalf("invalid level error = %v, want ErrInvalidConfig", err)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := LoggerConfig{Mode: settings.EnvProd, DisableSampling: true}
+			test.change(&config)
+			if _, err := NewLogger(config); !errors.Is(err, ErrInvalidConfig) {
+				t.Fatalf("NewLogger() error = %v, want ErrInvalidConfig", err)
+			}
+		})
 	}
-	if _, err := NewLogger(LoggerConfig{Filename: t.TempDir()}); err == nil {
-		t.Fatal("NewLogger accepted a directory as the log file")
-	}
+}
+
+func TestNewLoggerRejectsUnusableFilePaths(t *testing.T) {
 	parentFile := filepath.Join(t.TempDir(), "parent")
 	if err := os.WriteFile(parentFile, []byte("file"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewLogger(LoggerConfig{Filename: filepath.Join(parentFile, "service.log")}); err == nil {
-		t.Fatal("NewLogger accepted a regular file as a log directory")
+	for _, test := range []struct {
+		name     string
+		filename string
+	}{
+		{"directory as log file", t.TempDir()},
+		{"file as parent directory", filepath.Join(parentFile, "service.log")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := NewLogger(LoggerConfig{Mode: settings.EnvProd, Filename: test.filename}); err == nil {
+				t.Fatal("NewLogger() accepted an unusable file path")
+			}
+		})
 	}
 }
 
 func TestMustNewLoggerPanicsOnInvalidConfig(t *testing.T) {
-	if log := MustNewLogger(LoggerConfig{Mode: settings.EnvProd}); log == nil {
-		t.Fatal("MustNewLogger returned nil for valid config")
-	}
 	defer func() {
 		if recover() == nil {
 			t.Fatal("MustNewLogger did not panic")
 		}
 	}()
 	MustNewLogger(LoggerConfig{Level: "invalid"})
+}
+
+func TestMustNewLoggerReturnsUsableLogger(t *testing.T) {
+	log := MustNewLogger(LoggerConfig{Mode: settings.EnvProd, DisableSampling: true})
+	if err := log.SetLevel("debug"); err != nil || log.CurrentLevel() != "debug" {
+		t.Fatalf("MustNewLogger result level = %q, err = %v", log.CurrentLevel(), err)
+	}
 }
 
 func TestLoggerLevelControlAndUnavailableHandler(t *testing.T) {
@@ -131,25 +160,32 @@ func TestLoggerLevelControlAndUnavailableHandler(t *testing.T) {
 	}
 }
 
-func TestLoggerNilAndSyncErrors(t *testing.T) {
+func TestLoggerSyncHandlesInvalidAndUnsupportedErrors(t *testing.T) {
 	var nilLogger *Logger
 	if err := nilLogger.Sync(); !errors.Is(err, ErrInvalidLogger) {
 		t.Fatalf("nil Sync() error = %v", err)
 	}
-	if err := (*Logger)(nil).Sync(); !errors.Is(err, ErrInvalidLogger) {
-		t.Fatalf("invalid Sync() error = %v", err)
+	if err := (&Logger{}).Sync(); !errors.Is(err, ErrInvalidLogger) {
+		t.Fatalf("zero logger Sync() error = %v", err)
 	}
-	for _, err := range []error{syscall.ENOTTY, syscall.EINVAL, syscall.EBADF, syscall.ENOTSUP} {
-		if !isStdoutSyncErr(err) {
-			t.Errorf("isStdoutSyncErr(%v) = false", err)
+	for _, syncErr := range []error{syscall.ENOTTY, syscall.EINVAL, syscall.EBADF, syscall.ENOTSUP} {
+		log := Wrap(zap.New(zapcore.NewCore(
+			zapcore.NewConsoleEncoder(zap.NewDevelopmentEncoderConfig()),
+			failingSyncer{err: syncErr},
+			zapcore.DebugLevel,
+		)))
+		if err := log.Sync(); err != nil {
+			t.Errorf("Sync() for unsupported stream error %v = %v, want nil", syncErr, err)
 		}
 	}
-	if isStdoutSyncErr(errors.New("real sync failure")) {
-		t.Fatal("ordinary sync error was treated as stdout error")
-	}
-	base := zap.New(zapcore.NewCore(zapcore.NewConsoleEncoder(zap.NewDevelopmentEncoderConfig()), failingSyncer{}, zapcore.DebugLevel))
-	if err := Wrap(base).Sync(); err == nil || err.Error() != "sync failed" {
-		t.Fatalf("Sync() error = %v, want sync failure", err)
+	want := errors.New("sync failed")
+	log := Wrap(zap.New(zapcore.NewCore(
+		zapcore.NewConsoleEncoder(zap.NewDevelopmentEncoderConfig()),
+		failingSyncer{err: want},
+		zapcore.DebugLevel,
+	)))
+	if err := log.Sync(); !errors.Is(err, want) {
+		t.Fatalf("Sync() error = %v, want %v", err, want)
 	}
 }
 
@@ -167,7 +203,7 @@ func TestLoggerFatalExits(t *testing.T) {
 	}
 }
 
-type failingSyncer struct{}
+type failingSyncer struct{ err error }
 
 func (failingSyncer) Write(data []byte) (int, error) { return len(data), nil }
-func (failingSyncer) Sync() error                    { return errors.New("sync failed") }
+func (syncer failingSyncer) Sync() error             { return syncer.err }

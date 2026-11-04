@@ -8,6 +8,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/huynhanx03/go-common/pkg/common/apperr"
+	"github.com/huynhanx03/go-common/pkg/security"
 	"github.com/huynhanx03/go-common/pkg/security/authentication"
 	"github.com/huynhanx03/go-common/pkg/security/authorization"
 )
@@ -24,8 +25,15 @@ func StatusError(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return status.Error(codes.DeadlineExceeded, "request deadline exceeded")
 	}
-	if current, ok := status.FromError(err); ok && current.Code() != codes.Unknown {
-		return err
+	if errors.Is(err, authorization.ErrEvaluation) || errors.Is(err, ErrInvalidConfiguration) ||
+		errors.Is(err, security.ErrInvalidRequest) || errors.Is(err, security.ErrInvalidConfiguration) {
+		return status.Error(codes.Internal, "internal server error")
+	}
+	if errors.Is(err, security.ErrUnauthenticated) {
+		return status.Error(codes.Unauthenticated, "unauthenticated")
+	}
+	if errors.Is(err, security.ErrForbidden) {
+		return status.Error(codes.PermissionDenied, "permission denied")
 	}
 	if authenticationFailure(err) {
 		return status.Error(codes.Unauthenticated, "unauthenticated")
@@ -33,9 +41,8 @@ func StatusError(err error) error {
 	if errors.Is(err, authorization.ErrInvalidRequest) {
 		return status.Error(codes.InvalidArgument, "invalid authorization request")
 	}
-	if errors.Is(err, authorization.ErrEvaluation) ||
-		errors.Is(err, ErrInvalidConfiguration) {
-		return status.Error(codes.Internal, "internal server error")
+	if current, ok := status.FromError(err); ok && current.Code() != codes.Unknown {
+		return err
 	}
 
 	var applicationError *apperr.AppError
@@ -52,7 +59,6 @@ func authenticationFailure(err error) bool {
 		errors.Is(err, authentication.ErrInvalidToken) ||
 		errors.Is(err, authentication.ErrExpiredToken) ||
 		errors.Is(err, authentication.ErrUnknownKey) ||
-		errors.Is(err, authentication.ErrRetiredKey) ||
 		errors.Is(err, authentication.ErrPurposeMismatch)
 }
 

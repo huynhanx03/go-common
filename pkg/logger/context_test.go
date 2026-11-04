@@ -2,6 +2,7 @@ package logger
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -53,7 +54,7 @@ func TestWithFieldsFiltersAndBoundsAmbientFields(t *testing.T) {
 		String("oversized_value", strings.Repeat("x", maxFieldValueBytes+1)),
 	)
 	for index := 0; index < maxContextFields+1; index++ {
-		ctx = WithFields(ctx, String("field_"+string(rune('a'+index)), "ok"))
+		ctx = WithFields(ctx, String(fmt.Sprintf("field_%d", index), "ok"))
 	}
 	core, observed := observer.New(zapcore.DebugLevel)
 	Wrap(zap.New(core)).Info(ctx, "filtered")
@@ -69,24 +70,34 @@ func TestWithFieldsFiltersAndBoundsAmbientFields(t *testing.T) {
 			t.Errorf("invalid field %q was accepted", key)
 		}
 	}
+	for index := 0; index < maxContextFields-1; index++ {
+		if _, exists := fields[fmt.Sprintf("field_%d", index)]; !exists {
+			t.Errorf("field limit dropped field_%d", index)
+		}
+	}
+	if _, exists := fields[fmt.Sprintf("field_%d", maxContextFields-1)]; exists {
+		t.Fatal("field limit accepted one field too many")
+	}
 }
 
 func TestWithFieldsInheritAndNilContexts(t *testing.T) {
 	destination := WithFields(nil, String("destination", "kept"))
-	if got := InheritContext(destination, nil); got != destination {
-		t.Fatal("InheritContext with nil source changed destination")
+	logFields := func(ctx context.Context) map[string]interface{} {
+		core, observed := observer.New(zapcore.DebugLevel)
+		Wrap(zap.New(core)).Info(ctx, "context")
+		return observed.All()[0].ContextMap()
 	}
-	if got := InheritContext(destination, context.Background()); got != destination {
-		t.Fatal("InheritContext without source fields changed destination")
+	for _, source := range []context.Context{nil, context.Background()} {
+		if fields := logFields(InheritContext(destination, source)); fields["destination"] != "kept" {
+			t.Errorf("inheriting empty source lost destination fields: %#v", fields)
+		}
 	}
-	if got := WithFields(context.Background(), String("password", "blocked")); got != context.Background() {
-		t.Fatal("WithFields with no accepted values changed the context")
+	if fields := logFields(WithFields(context.Background(), String("password", "blocked"))); len(fields) != 0 {
+		t.Fatalf("rejected fields reached the logger: %#v", fields)
 	}
 	source := WithFields(context.Background(), String("operation_id", "copied"))
 	inherited := InheritContext(destination, source)
-	core, observed := observer.New(zapcore.DebugLevel)
-	Wrap(zap.New(core)).Info(inherited, "inherited")
-	fields := observed.All()[0].ContextMap()
+	fields := logFields(inherited)
 	if fields["destination"] != "kept" || fields["operation_id"] != "copied" {
 		t.Fatalf("inherited fields = %#v", fields)
 	}

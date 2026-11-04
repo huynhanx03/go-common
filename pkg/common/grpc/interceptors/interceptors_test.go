@@ -23,6 +23,7 @@ import (
 	commongrpc "github.com/huynhanx03/go-common/pkg/common/grpc"
 	"github.com/huynhanx03/go-common/pkg/common/grpc/interceptors"
 	"github.com/huynhanx03/go-common/pkg/logger"
+	"github.com/huynhanx03/go-common/pkg/security"
 	"github.com/huynhanx03/go-common/pkg/security/authentication"
 	"github.com/huynhanx03/go-common/pkg/security/authorization"
 )
@@ -125,7 +126,6 @@ func newHarness(t *testing.T) harness {
 	source := commongrpc.DefaultBearerMetadataSource()
 	source.Optional = true
 	source.MaxCredentialBytes = 32
-	source.Now = func() time.Time { return fixedNow }
 	verifier := verifierFunc(func(
 		_ context.Context,
 		raw string,
@@ -142,19 +142,20 @@ func newHarness(t *testing.T) harness {
 		}, nil
 	})
 
+	checker := security.NewChecker(security.Config{Verifier: verifier, Clock: func() time.Time { return fixedNow }})
 	commonLogger := logger.Wrap(root)
 	server := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(
 			interceptors.UnaryRequestIDServer(commongrpc.DefaultRequestIDOptions()),
 			interceptors.UnaryLoggingServer(commonLogger),
 			interceptors.UnaryRecoveryServer(commonLogger),
-			interceptors.UnaryAuthenticationServer(verifier, source),
+			interceptors.UnaryAuthenticationServer(checker, source),
 		),
 		grpc.ChainStreamInterceptor(
 			interceptors.StreamRequestIDServer(commongrpc.DefaultRequestIDOptions()),
 			interceptors.StreamLoggingServer(commonLogger),
 			interceptors.StreamRecoveryServer(commonLogger),
-			interceptors.StreamAuthenticationServer(verifier, source),
+			interceptors.StreamAuthenticationServer(checker, source),
 		),
 	)
 	server.RegisterService(&transportServiceDescription, testTransportServer{})
@@ -401,8 +402,8 @@ func TestUnaryAuthorizationFailsClosed(t *testing.T) {
 		AuthenticatedUntil: time.Now().Add(time.Hour),
 	}
 	ctx := authentication.WithPrincipal(context.Background(), principal)
-	resolver := func(context.Context, string, any) (commongrpc.Permission, error) {
-		return commongrpc.Permission{Resource: "document", Action: "update"}, nil
+	resolver := func(context.Context, string, any) (security.Permission, error) {
+		return security.Permission{Scope: authorization.Scope{Type: "tenant", ID: "community"}, Resource: "document", ResourceID: "document-1", Action: "update"}, nil
 	}
 	var handlerCalls atomic.Int32
 	handler := func(context.Context, any) (any, error) {
@@ -411,12 +412,12 @@ func TestUnaryAuthorizationFailsClosed(t *testing.T) {
 	}
 
 	denied := interceptors.UnaryAuthorizationServer(
-		authorizerFunc(func(_ context.Context, request authorization.Request) (authorization.Decision, error) {
-			if request.Principal != principal {
+		security.NewChecker(security.Config{Authorizer: authorizerFunc(func(_ context.Context, request authorization.Request) (authorization.Decision, error) {
+			if request.Principal != principal || request.Scope != (authorization.Scope{Type: "tenant", ID: "community"}) || request.ResourceID != "document-1" {
 				t.Fatalf("principal = %+v", request.Principal)
 			}
 			return authorization.Decision{Allowed: false}, nil
-		}),
+		})}),
 		resolver,
 	)
 	_, err := denied(ctx, nil, &grpc.UnaryServerInfo{FullMethod: testUnaryMethod}, handler)
@@ -425,9 +426,9 @@ func TestUnaryAuthorizationFailsClosed(t *testing.T) {
 	}
 
 	failed := interceptors.UnaryAuthorizationServer(
-		authorizerFunc(func(context.Context, authorization.Request) (authorization.Decision, error) {
+		security.NewChecker(security.Config{Authorizer: authorizerFunc(func(context.Context, authorization.Request) (authorization.Decision, error) {
 			return authorization.Decision{}, errors.New("policy database secret")
-		}),
+		})}),
 		resolver,
 	)
 	_, err = failed(ctx, nil, &grpc.UnaryServerInfo{FullMethod: testUnaryMethod}, handler)
@@ -438,6 +439,51 @@ func TestUnaryAuthorizationFailsClosed(t *testing.T) {
 	_, err = denied(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: testUnaryMethod}, handler)
 	if status.Code(err) != codes.Unauthenticated {
 		t.Fatalf("missing principal error = %v", err)
+	}
+}
+
+func TestUnarySecuritySharesCheckerAndAuthenticatedResolverContext(t *testing.T) {
+	principal := authentication.Principal{Authenticated: true, Subject: "user:42", AuthenticatedUntil: fixedNow.Add(time.Hour)}
+	verifyCalls, authorizeCalls := 0, 0
+	checker := security.NewChecker(security.Config{
+		Clock: func() time.Time { return fixedNow },
+		Verifier: verifierFunc(func(_ context.Context, raw string, purpose authentication.TokenPurpose) (authentication.Principal, error) {
+			verifyCalls++
+			if raw != "token" || purpose != authentication.PurposeAccess {
+				t.Fatalf("credential = %q, %q", raw, purpose)
+			}
+			return principal, nil
+		}),
+		Authorizer: authorizerFunc(func(_ context.Context, request authorization.Request) (authorization.Decision, error) {
+			authorizeCalls++
+			if request.Principal != principal || request.Scope.ID != "community" || request.ResourceID != "document-1" {
+				t.Fatalf("request = %+v", request)
+			}
+			return authorization.Decision{Allowed: true}, nil
+		}),
+	})
+	resolver := func(ctx context.Context, method string, request any) (security.Permission, error) {
+		got, exists := authentication.FromContext(ctx)
+		if !exists || got != principal || method != testUnaryMethod || request != "request" {
+			t.Fatalf("resolver context/request = %+v, %q, %v", got, method, request)
+		}
+		return security.Permission{Scope: authorization.Scope{Type: "tenant", ID: "community"}, Resource: "documents", ResourceID: "document-1", Action: "read"}, nil
+	}
+	authenticate := interceptors.UnaryAuthenticationServer(checker, commongrpc.DefaultBearerMetadataSource())
+	authorize := interceptors.UnaryAuthorizationServer(checker, resolver)
+	info := &grpc.UnaryServerInfo{FullMethod: testUnaryMethod}
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer token"))
+	result, err := authenticate(ctx, "request", info, func(ctx context.Context, request any) (any, error) {
+		return authorize(ctx, request, info, func(ctx context.Context, _ any) (any, error) {
+			got, exists := authentication.FromContext(ctx)
+			if !exists || got != principal {
+				t.Fatalf("handler principal = %+v", got)
+			}
+			return "allowed", nil
+		})
+	})
+	if err != nil || result != "allowed" || verifyCalls != 1 || authorizeCalls != 1 {
+		t.Fatalf("result=%v err=%v verify=%d authorize=%d", result, err, verifyCalls, authorizeCalls)
 	}
 }
 
@@ -459,20 +505,20 @@ func TestStreamAuthorizationAndRecovery(t *testing.T) {
 	stream := fakeServerStream{
 		ctx: authentication.WithPrincipal(context.Background(), principal),
 	}
-	resolve := func(_ context.Context, method string, request any) (commongrpc.Permission, error) {
+	resolve := func(_ context.Context, method string, request any) (security.Permission, error) {
 		if method != testStreamMethod || request != nil {
 			t.Fatalf("method=%q request=%v", method, request)
 		}
-		return commongrpc.Permission{Resource: "document", Action: "watch"}, nil
+		return security.Permission{Resource: "document", Action: "watch"}, nil
 	}
 	var handlerCalls atomic.Int32
 	allowed := interceptors.StreamAuthorizationServer(
-		authorizerFunc(func(_ context.Context, request authorization.Request) (authorization.Decision, error) {
+		security.NewChecker(security.Config{Authorizer: authorizerFunc(func(_ context.Context, request authorization.Request) (authorization.Decision, error) {
 			if request.Principal != principal {
 				t.Fatalf("principal = %+v", request.Principal)
 			}
 			return authorization.Decision{Allowed: true}, nil
-		}),
+		})}),
 		resolve,
 	)
 	err := allowed(

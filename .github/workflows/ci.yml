@@ -2,6 +2,7 @@ name: ci
 
 on:
   pull_request:
+  workflow_call:
 
 permissions:
   contents: read
@@ -35,12 +36,6 @@ jobs:
         env:
           COVER_PROFILE: coverage.out
         run: ./scripts/verify-coverage.sh
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: go-common-coverage-${{ github.sha }}
-          path: coverage.out
-          if-no-files-found: error
-          retention-days: 30
 
   race:
     name: Race tests
@@ -87,10 +82,43 @@ jobs:
       - run: go mod download
       - run: make test-integration
 
+  benchmark:
+    name: Benchmarks
+    outputs:
+      report: ${{ steps.benchmarks.outputs.report }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod download
+      - name: Run benchmarks
+        id: benchmarks
+        run: |
+          log_file="$RUNNER_TEMP/go-benchmarks.log"
+          set +e
+          make benchmarks > "$log_file" 2>&1
+          result=$?
+          set -e
+          cat "$log_file"
+
+          delimiter="BENCHMARKS_$(openssl rand -hex 16)"
+          {
+            echo "report<<$delimiter"
+            grep -E '^(Benchmark|ok[[:space:]]|FAIL)' "$log_file" || true
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+          exit "$result"
+
   test-overview:
     name: Test Overview
     if: always()
-    needs: [unit, race, fuzz-seeds, integration]
+    needs: [unit, race, fuzz-seeds, integration, benchmark]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -100,6 +128,7 @@ jobs:
           RACE_RESULT: ${{ needs.race.result }}
           FUZZ_RESULT: ${{ needs.fuzz-seeds.result }}
           INTEGRATION_RESULT: ${{ needs.integration.result }}
+          BENCHMARK_RESULT: ${{ needs.benchmark.result }}
           UNIT_COVERAGE: ${{ needs.unit.outputs.coverage }}
           MINIMUM_COVERAGE: ${{ needs.unit.outputs.minimum_coverage }}
         run: |
@@ -116,8 +145,7 @@ jobs:
             echo "| Race tests (all packages) | $RACE_RESULT | — |"
             echo "| Fuzz seed corpus | $FUZZ_RESULT | — |"
             echo "| Container integration tests | $INTEGRATION_RESULT | — |"
-            echo
-            printf 'Coverage profile: download artifact go-common-coverage-%s.\n' "$GITHUB_SHA"
+            echo "| Benchmarks | $BENCHMARK_RESULT | — |"
           } >> "$GITHUB_STEP_SUMMARY"
 
   quality:
@@ -140,7 +168,7 @@ jobs:
           go mod verify
           go mod tidy -diff
       - name: Validate workflows
-        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+        run: make workflow-check
       - name: Verify formatting
         run: make format-check
       - name: Vet
@@ -175,16 +203,17 @@ jobs:
   gate:
     name: Required gate
     if: always()
-    needs: [unit, race, fuzz-seeds, integration, test-overview, quality, security]
+    needs: [unit, race, fuzz-seeds, integration, benchmark, test-overview, quality, security]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Require tests, quality, and security to pass
+      - name: Require every CI check to pass
         env:
           UNIT_RESULT: ${{ needs.unit.result }}
           RACE_RESULT: ${{ needs.race.result }}
           FUZZ_RESULT: ${{ needs.fuzz-seeds.result }}
           INTEGRATION_RESULT: ${{ needs.integration.result }}
+          BENCHMARK_RESULT: ${{ needs.benchmark.result }}
           TEST_OVERVIEW_RESULT: ${{ needs.test-overview.result }}
           QUALITY_RESULT: ${{ needs.quality.result }}
           SECURITY_RESULT: ${{ needs.security.result }}
@@ -194,6 +223,7 @@ jobs:
             "$RACE_RESULT" \
             "$FUZZ_RESULT" \
             "$INTEGRATION_RESULT" \
+            "$BENCHMARK_RESULT" \
             "$TEST_OVERVIEW_RESULT" \
             "$QUALITY_RESULT" \
             "$SECURITY_RESULT"; do
@@ -202,3 +232,52 @@ jobs:
               exit 1
             fi
           done
+
+  ci-report:
+    name: CI report artifact
+    if: ${{ always() && github.event_name == 'pull_request' }}
+    continue-on-error: true
+    needs: [unit, race, fuzz-seeds, integration, benchmark, test-overview, quality, security, gate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Build CI report
+        env:
+          UNIT_RESULT: ${{ needs.unit.result }}
+          RACE_RESULT: ${{ needs.race.result }}
+          FUZZ_RESULT: ${{ needs.fuzz-seeds.result }}
+          INTEGRATION_RESULT: ${{ needs.integration.result }}
+          BENCHMARK_RESULT: ${{ needs.benchmark.result }}
+          OVERVIEW_RESULT: ${{ needs.test-overview.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          SECURITY_RESULT: ${{ needs.security.result }}
+          GATE_RESULT: ${{ needs.gate.result }}
+          UNIT_COVERAGE: ${{ needs.unit.outputs.coverage }}
+          MINIMUM_COVERAGE: ${{ needs.unit.outputs.minimum_coverage }}
+          BENCHMARK_REPORT: ${{ needs.benchmark.outputs.report }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          jq -n \
+            --arg unit "$UNIT_RESULT" \
+            --arg race "$RACE_RESULT" \
+            --arg fuzz "$FUZZ_RESULT" \
+            --arg integration "$INTEGRATION_RESULT" \
+            --arg benchmark "$BENCHMARK_RESULT" \
+            --arg overview "$OVERVIEW_RESULT" \
+            --arg quality "$QUALITY_RESULT" \
+            --arg security "$SECURITY_RESULT" \
+            --arg gate "$GATE_RESULT" \
+            --arg coverage "$UNIT_COVERAGE" \
+            --arg minimum_coverage "$MINIMUM_COVERAGE" \
+            --arg benchmark_report "$BENCHMARK_REPORT" \
+            --arg run_url "$RUN_URL" \
+            '{checks: {unit: $unit, race: $race, fuzz_seeds: $fuzz, integration: $integration, benchmarks: $benchmark, test_overview: $overview, quality: $quality, security: $security, required_gate: $gate}, coverage: {total_percent: $coverage, minimum_percent: $minimum_coverage}, benchmark_output: $benchmark_report, workflow_run: $run_url}' \
+            > "$RUNNER_TEMP/ci-report.json"
+
+      - name: Upload CI report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: go-common-ai-ci-report
+          path: ${{ runner.temp }}/ci-report.json
+          if-no-files-found: error
+          retention-days: 1

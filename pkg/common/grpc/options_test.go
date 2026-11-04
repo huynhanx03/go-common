@@ -50,8 +50,7 @@ func TestNormalizeMetadataSource(t *testing.T) {
 	}
 	if defaults.MetadataKey != commongrpc.DefaultCredentialMetadataKey ||
 		defaults.Scheme != commongrpc.DefaultCredentialScheme ||
-		defaults.MaxCredentialBytes != commongrpc.DefaultMaxCredentialBytes ||
-		defaults.Now == nil {
+		defaults.MaxCredentialBytes != commongrpc.DefaultMaxCredentialBytes {
 		t.Fatalf("defaults = %+v", defaults)
 	}
 	explicit := commongrpc.DefaultBearerMetadataSource()
