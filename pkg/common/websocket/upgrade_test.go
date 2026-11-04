@@ -46,7 +46,7 @@ func startRunningHub(
 ) runningHubHarness {
 	t.Helper()
 
-	hub, err := NewHub(options)
+	hub, err := NewHub(testLogger(), options)
 	if err != nil {
 		t.Fatalf("NewHub: %v", err)
 	}
@@ -261,7 +261,7 @@ func TestUpgradeConnectionAndRemoteIPRateLimitsAreBounded(t *testing.T) {
 func TestRemoteIPTrustsForwardingOnlyFromConfiguredPeers(t *testing.T) {
 	t.Parallel()
 
-	untrusted, err := NewHub(validHubOptions())
+	untrusted, err := NewHub(testLogger(), validHubOptions())
 	if err != nil {
 		t.Fatalf("NewHub untrusted: %v", err)
 	}
@@ -274,7 +274,7 @@ func TestRemoteIPTrustsForwardingOnlyFromConfiguredPeers(t *testing.T) {
 
 	options := validHubOptions()
 	options.TrustedProxies = []string{"10.0.0.0/8"}
-	trusted, err := NewHub(options)
+	trusted, err := NewHub(testLogger(), options)
 	if err != nil {
 		t.Fatalf("NewHub trusted: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestRemoteIPTrustsForwardingOnlyFromConfiguredPeers(t *testing.T) {
 func TestUpgradeBeforeRunFailsServiceUnavailable(t *testing.T) {
 	t.Parallel()
 
-	hub, err := NewHub(validHubOptions())
+	hub, err := NewHub(testLogger(), validHubOptions())
 	if err != nil {
 		t.Fatalf("NewHub: %v", err)
 	}

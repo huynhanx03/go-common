@@ -16,10 +16,12 @@ import (
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
+
+	"github.com/huynhanx03/go-common/pkg/logger"
 )
 
 func TestServerServesHealthAndStopsOnCancellation(t *testing.T) {
-	server, err := grpcserver.New(grpcserver.Config{Name: "test-grpc", Address: "127.0.0.1:0"}, func(*grpc.Server) {})
+	server, err := grpcserver.New(grpcserver.Config{Name: "test-grpc", Address: "127.0.0.1:0", Logger: logger.Wrap(zap.NewNop())}, func(*grpc.Server) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +78,7 @@ func TestServerRejectsInvalidConfigurationAndOccupiedPort(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer listener.Close()
-	server, err := grpcserver.New(grpcserver.Config{Name: "test", Address: listener.Addr().String()}, func(*grpc.Server) {})
+	server, err := grpcserver.New(grpcserver.Config{Name: "test", Address: listener.Addr().String(), Logger: logger.Wrap(zap.NewNop())}, func(*grpc.Server) {})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +92,7 @@ func TestServerRejectsInvalidConfigurationAndOccupiedPort(t *testing.T) {
 
 func TestShutdownForcesAnInFlightRPCAtDeadline(t *testing.T) {
 	entered := make(chan struct{})
-	server, err := grpcserver.New(grpcserver.Config{Name: "slow-grpc", Address: "127.0.0.1:0"}, func(server *grpc.Server) {
+	server, err := grpcserver.New(grpcserver.Config{Name: "slow-grpc", Address: "127.0.0.1:0", Logger: logger.Wrap(zap.NewNop())}, func(server *grpc.Server) {
 		server.RegisterService(&grpc.ServiceDesc{
 			ServiceName: "test.Slow", HandlerType: (*slowService)(nil),
 			Methods: []grpc.MethodDesc{{MethodName: "Wait", Handler: func(_ any, ctx context.Context, _ func(any) error, _ grpc.UnaryServerInterceptor) (any, error) {
@@ -150,7 +152,7 @@ type slowService interface{}
 func TestRecoveredPanicUsesServiceLoggerAndCompletesRPCLog(t *testing.T) {
 	core, logs := observer.New(zap.DebugLevel)
 	server, err := grpcserver.New(grpcserver.Config{
-		Name: "panic-grpc", Address: "127.0.0.1:0", Logger: zap.New(core),
+		Name: "panic-grpc", Address: "127.0.0.1:0", Logger: logger.Wrap(zap.New(core)),
 		UnaryInterceptors: []grpc.UnaryServerInterceptor{
 			func(context.Context, any, *grpc.UnaryServerInfo, grpc.UnaryHandler) (any, error) {
 				panic("test panic")

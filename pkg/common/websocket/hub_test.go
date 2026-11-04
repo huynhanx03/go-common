@@ -11,8 +11,12 @@ import (
 
 	coderwebsocket "github.com/coder/websocket"
 
+	"github.com/huynhanx03/go-common/pkg/logger"
 	"github.com/huynhanx03/go-common/pkg/security/authentication"
+	"go.uber.org/zap"
 )
+
+func testLogger() *logger.Logger { return logger.Wrap(zap.NewNop()) }
 
 func TestSubscribeAlwaysAuthorizesAndUnsubscribeOnlyRemovesCaller(t *testing.T) {
 	var authorizationMu sync.Mutex
@@ -116,10 +120,10 @@ func sendControlEnvelope(
 func TestHubRunAndShutdownStateContracts(t *testing.T) {
 	t.Parallel()
 
-	if _, err := NewHub(Options{}); !errors.Is(err, ErrInvalidOptions) {
+	if _, err := NewHub(testLogger(), Options{}); !errors.Is(err, ErrInvalidOptions) {
 		t.Fatalf("NewHub zero options error = %v", err)
 	}
-	hub, err := NewHub(validHubOptions())
+	hub, err := NewHub(testLogger(), validHubOptions())
 	if err != nil {
 		t.Fatalf("NewHub: %v", err)
 	}

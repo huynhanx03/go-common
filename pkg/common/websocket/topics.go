@@ -24,6 +24,7 @@ func (hub *Hub) subscribe(connection *Conn, topic string) error {
 		return ErrShuttingDown
 	}
 	if err := authorizeTopic(
+		hub.logger,
 		connection.authorize,
 		connection.ctx,
 		connection.principal,
@@ -52,6 +53,7 @@ func (hub *Hub) subscribe(connection *Conn, topic string) error {
 }
 
 func authorizeTopic(
+	log *logger.Logger,
 	authorize TopicAuthorizer,
 	ctx context.Context,
 	principal authentication.Principal,
@@ -67,7 +69,7 @@ func authorizeTopic(
 			stack = stack[:maxHandlerStackBytes]
 		}
 		logContext := logger.WithFields(ctx, logger.String("topic", topic))
-		logger.FromContext(logContext).Error(
+		log.Error(logContext,
 			"websocket topic authorizer panic recovered",
 			zap.String("panic_type", fmt.Sprintf("%T", recovered)),
 			zap.ByteString("stack", stack),

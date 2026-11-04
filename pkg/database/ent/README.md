@@ -11,15 +11,14 @@ generated client stays a one-liner in the application.
 
 ```go
 drv, err := ent.NewDriver(cfg.Database) // mysql or postgres, pooled + pinged
-client := gen.NewClient(gen.Driver(ent.WrapLogging(drv, 0))) // 0 = 200ms slow threshold
+client := gen.NewClient(gen.Driver(ent.WrapLogging(log, drv, 0))) // 0 = 200ms slow threshold
 ```
 
-`WrapLogging` times every statement and logs through `logger.FromContext`,
-so lines carry the request's `cid`. Errors log at Error, statements slower
+`WrapLogging` times every statement and logs through the injected `logger.Logger`,
+so lines carry the request ID and active trace/span IDs from `ctx`. Errors log at Error, statements slower
 than the threshold at Warn, everything at Debug. There is no query-log
 switch: the logger's level is the switch — dev runs at Debug and sees every
-statement, prod runs at Info and the Debug lines (the only place args
-appear) are dropped before formatting.
+statement, prod runs at Info and the Debug lines are dropped before formatting.
 
 ### 2. Actor resolver (who is acting)
 

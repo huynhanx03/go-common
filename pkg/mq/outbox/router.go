@@ -38,14 +38,15 @@ type routedHandler struct {
 // durable retry, backoff, dead-letter, fencing, and lifecycle semantics while
 // applications provide typed local consumers without a second broker.
 type Router struct {
+	logger       *logger.Logger
 	routes       map[string][]routedHandler
 	destinations []string
 }
 
 // NewRouter validates and freezes a route catalog. The input may be discarded
 // or mutated after this call without changing the router.
-func NewRouter(routes ...Route) (*Router, error) {
-	if len(routes) == 0 || len(routes) > maximumRouterHandlers {
+func NewRouter(log *logger.Logger, routes ...Route) (*Router, error) {
+	if log == nil || len(routes) == 0 || len(routes) > maximumRouterHandlers {
 		return nil, ErrInvalidRouter
 	}
 	catalog := make(map[string][]routedHandler)
@@ -78,7 +79,7 @@ func NewRouter(routes ...Route) (*Router, error) {
 		destinations = append(destinations, destination)
 	}
 	sort.Strings(destinations)
-	return &Router{routes: catalog, destinations: destinations}, nil
+	return &Router{logger: log, routes: catalog, destinations: destinations}, nil
 }
 
 // Destinations returns a stable copy suitable for Options.Destinations when a
@@ -104,12 +105,12 @@ func (router *Router) Publish(ctx context.Context, message Message) (PublishAck,
 	}
 	for _, handler := range handlers {
 		handlerCtx := logger.WithFields(ctx, logger.String("event_handler", handler.name))
-		logger.FromContext(handlerCtx).Debug("outbox route handler started")
+		router.logger.Debug(handlerCtx, "outbox route handler started")
 		if err := callRouteHandler(handlerCtx, handler, cloneRouterMessage(message)); err != nil {
-			logger.FromContext(handlerCtx).Warn("outbox route handler failed")
+			router.logger.Warn(handlerCtx, "outbox route handler failed")
 			return PublishAck{}, err
 		}
-		logger.FromContext(handlerCtx).Debug("outbox route handler completed")
+		router.logger.Debug(handlerCtx, "outbox route handler completed")
 	}
 	return PublishAck{Reference: strings.Clone(message.ID)}, nil
 }

@@ -62,7 +62,7 @@ type ScheduleGateway interface {
 // authenticates the delivery and returns the neutral envelope; each Decode*
 // turns an already-verified Event.Payload into a neutral object.
 type EventDecoder interface {
-	VerifyAndDecode(payload []byte, signatureHeader string) (*Event, *apperr.AppError)
+	VerifyAndDecode(ctx context.Context, payload []byte, signatureHeader string) (*Event, *apperr.AppError)
 	DecodeSubscription(payload []byte) (*Subscription, *apperr.AppError)
 	DecodeInvoice(payload []byte) (*Invoice, *apperr.AppError)
 	DecodePaymentIntent(payload []byte) (*PaymentIntent, *apperr.AppError)

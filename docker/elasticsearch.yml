@@ -1,0 +1,6 @@
+services:
+  elasticsearch:
+    image: elastic/elasticsearch:8.18.8
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false

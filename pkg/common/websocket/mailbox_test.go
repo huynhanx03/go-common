@@ -52,7 +52,7 @@ func newUnitConnection(
 func newUnitHub(t *testing.T, options Options) *Hub {
 	t.Helper()
 
-	hub, err := NewHub(options)
+	hub, err := NewHub(testLogger(), options)
 	if err != nil {
 		t.Fatalf("NewHub: %v", err)
 	}

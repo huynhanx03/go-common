@@ -10,6 +10,7 @@ This directory contains production-ready, reusable components for building Go mi
 | | http | HTTP request parsing, response formatting, handler wrappers |
 | | locks | Distributed locking mechanisms |
 | | workerpool | Concurrent worker pool implementation |
+| **stream** | | Bounded-memory chunked stream windows |
 | **database** | | Data layer adapters |
 | | ent | MySQL adapter using Ent ORM |
 | | mongodb | MongoDB adapter |
@@ -23,14 +24,15 @@ This directory contains production-ready, reusable components for building Go mi
 | | bloom | Bloom filter for probabilistic membership testing |
 | | btree | B-tree implementation |
 | | buffer | Ring buffer and buffer utilities |
-| | queue | Queue implementations |
 | | shardedmap | Sharded concurrent map for high-throughput scenarios |
 | | sketch | Count-min sketch for frequency estimation |
+| **sync** | | Concurrent queues, maps, counters, and read-write mutexes |
 | **cdc** | | Change Data Capture utilities for data synchronization |
 | **dto** | | Data Transfer Objects and pagination contracts |
 | **algorithm** | | Common algorithms |
 | **constraints** | | Generic type constraints for Go generics |
 | **encoding** | | Encoding/decoding utilities |
+| **bytes** | | ASCII byte classification utilities |
 | **hash** | | Hashing utilities |
 | **logger** | | Structured logging |
 | **pool** | | Object pooling for memory efficiency |

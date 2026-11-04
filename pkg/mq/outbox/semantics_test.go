@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/huynhanx03/go-common/pkg/correlation"
+	"github.com/huynhanx03/go-common/pkg/logger"
 )
 
 func TestInvalidCorrelationIDIsMarkedDeadWithoutPublishing(t *testing.T) {
@@ -40,7 +40,7 @@ func TestInvalidCorrelationIDIsMarkedDeadWithoutPublishing(t *testing.T) {
 			return nil
 		},
 	}
-	relay, err := New(store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
+	relay, err := New(testLog, store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
 		published.Store(true)
 		return PublishAck{}, nil
 	}), nil, validOptions())
@@ -94,7 +94,7 @@ func TestUnsafeMessageMetadataIsMarkedDeadWithoutPublishing(t *testing.T) {
 					return nil
 				},
 			}
-			relay, err := New(store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
+			relay, err := New(testLog, store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
 				published.Store(true)
 				return PublishAck{}, nil
 			}), nil, validOptions())
@@ -140,7 +140,7 @@ func TestMessageDataExceedingConfiguredBudgetIsMarkedDeadWithoutPublishing(t *te
 	}
 	options := validOptions()
 	options.MaxMessageBytes = len(message.Key) + len(message.Payload) - 1
-	relay, err := New(store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
+	relay, err := New(testLog, store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
 		published.Store(true)
 		return PublishAck{}, nil
 	}), nil, options)
@@ -179,7 +179,7 @@ func TestUnsafePublishReferenceIsDiscardedAfterSuccessfulPublish(t *testing.T) {
 			return nil
 		},
 	}
-	relay, err := New(store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
+	relay, err := New(testLog, store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
 		return PublishAck{Reference: "unsafe\nreference"}, nil
 	}), nil, validOptions())
 	if err != nil {
@@ -215,7 +215,7 @@ func TestPublishedButUnfinalizedMessageIsNotExplicitlyRetried(t *testing.T) {
 			return nil
 		},
 	}
-	relay, err := New(store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
+	relay, err := New(testLog, store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
 		return PublishAck{Reference: "remote-reference"}, nil
 	}), nil, validOptions())
 	if err != nil {
@@ -255,7 +255,7 @@ func TestShutdownCancelsPublishAndFinalizesRetryWithZeroDelay(t *testing.T) {
 			return nil
 		},
 	}
-	relay, err := New(store, PublisherFunc(func(ctx context.Context, _ Message) (PublishAck, error) {
+	relay, err := New(testLog, store, PublisherFunc(func(ctx context.Context, _ Message) (PublishAck, error) {
 		close(publishStarted)
 		<-ctx.Done()
 		return PublishAck{}, ctx.Err()
@@ -320,7 +320,7 @@ func TestShutdownReleasesClaimedMessagesThatHaveNotStartedPublishing(t *testing.
 			return nil
 		},
 	}
-	relay, err := New(store, PublisherFunc(func(ctx context.Context, _ Message) (PublishAck, error) {
+	relay, err := New(testLog, store, PublisherFunc(func(ctx context.Context, _ Message) (PublishAck, error) {
 		published.Add(1)
 		return PublishAck{}, ctx.Err()
 	}), nil, validOptions())
@@ -367,7 +367,7 @@ func TestRelayNeverClaimsBeyondAvailableConcurrency(t *testing.T) {
 		},
 		markPublished: func(context.Context, Lease, PublishAck) error { return nil },
 	}
-	relay, err := New(store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
+	relay, err := New(testLog, store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
 		publishStarted <- struct{}{}
 		<-release
 		return PublishAck{}, nil
@@ -416,7 +416,7 @@ func TestStoreOverClaimFailsFastWithoutPublishing(t *testing.T) {
 			return nil
 		},
 	}
-	relay, err := New(store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
+	relay, err := New(testLog, store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
 		published.Add(1)
 		return PublishAck{}, nil
 	}), nil, validOptions())
@@ -488,7 +488,7 @@ func TestStoreIdentityContractViolationsFailWithoutPublishingOrFinalizing(t *tes
 					return nil
 				},
 			}
-			relay, err := New(store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
+			relay, err := New(testLog, store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
 				published.Add(1)
 				cancel()
 				return PublishAck{}, nil
@@ -528,7 +528,7 @@ func TestStoreCannotReturnClaimsWithAnError(t *testing.T) {
 		markRetry:     func(context.Context, Lease, RetryDisposition) error { finalized.Add(1); return nil },
 		markDead:      func(context.Context, Lease, DeadDisposition) error { finalized.Add(1); return nil },
 	}
-	relay, err := New(store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
+	relay, err := New(testLog, store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
 		published.Add(1)
 		return PublishAck{}, nil
 	}), nil, validOptions())
@@ -580,7 +580,7 @@ func TestInvalidBackoffFallsBackToPollInterval(t *testing.T) {
 			options := validOptions()
 			options.PollInterval = 17 * time.Millisecond
 			options.Backoff = test.backoff
-			relay, err := New(store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
+			relay, err := New(testLog, store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
 				return PublishAck{}, &PublishError{Code: "unavailable", Retryable: true}
 			}), nil, options)
 			if err != nil {
@@ -634,7 +634,7 @@ func TestFatalStoreContractDrainsPreviouslyAdmittedWorkersBeforeRunReturns(t *te
 	options := validOptions()
 	options.Concurrency = 4
 	options.ClaimLimit = 2
-	relay, err := New(store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
+	relay, err := New(testLog, store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
 		publishStarted <- struct{}{}
 		<-releasePublish
 		return PublishAck{}, nil
@@ -661,7 +661,7 @@ func TestFatalStoreContractDrainsPreviouslyAdmittedWorkersBeforeRunReturns(t *te
 	}
 }
 
-func TestMissingCorrelationIDIsStableAcrossRetry(t *testing.T) {
+func TestMissingRequestIDRemainsAbsentAcrossRetry(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -686,8 +686,8 @@ func TestMissingCorrelationIDIsStableAcrossRetry(t *testing.T) {
 			return nil
 		},
 	}
-	relay, err := New(store, PublisherFunc(func(publishCtx context.Context, _ Message) (PublishAck, error) {
-		correlationIDs <- correlation.FromContext(publishCtx)
+	relay, err := New(testLog, store, PublisherFunc(func(publishCtx context.Context, _ Message) (PublishAck, error) {
+		correlationIDs <- logger.RequestID(publishCtx)
 		if publishes.Add(1) == 1 {
 			return PublishAck{}, &PublishError{Code: "unavailable", Retryable: true}
 		}
@@ -700,8 +700,8 @@ func TestMissingCorrelationIDIsStableAcrossRetry(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	first, second := <-correlationIDs, <-correlationIDs
-	if first == "" || first != second {
-		t.Fatalf("correlation IDs = (%q, %q), want identical non-empty values", first, second)
+	if first != "" || second != "" {
+		t.Fatalf("request IDs = (%q, %q), want both absent", first, second)
 	}
 }
 
@@ -730,7 +730,7 @@ func TestPublisherPanicIsConvertedToRetry(t *testing.T) {
 			return nil
 		},
 	}
-	relay, err := New(store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
+	relay, err := New(testLog, store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
 		panic("publisher bug")
 	}), nil, validOptions())
 	if err != nil {
@@ -744,7 +744,7 @@ func TestPublisherPanicIsConvertedToRetry(t *testing.T) {
 func TestShutdownBeforeRunPreventsRun(t *testing.T) {
 	t.Parallel()
 
-	relay, err := New(inertStore{}, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
+	relay, err := New(testLog, inertStore{}, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
 		return PublishAck{}, nil
 	}), nil, validOptions())
 	if err != nil {

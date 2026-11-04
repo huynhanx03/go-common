@@ -77,7 +77,7 @@ err = producer.SendContext(
 	ctx,
 	[]byte(eventID),
 	payload,
-	[]forge.Header{{Key: []byte("cid"), Value: []byte(cid)}},
+	[]forge.Header{{Key: []byte("correlation_id"), Value: []byte(correlationID)}},
 	forge.AckFsync,
 )
 if err != nil {

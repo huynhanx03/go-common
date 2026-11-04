@@ -5,7 +5,7 @@ import (
 
 	"github.com/huynhanx03/go-common/pkg/common/apperr"
 	"github.com/huynhanx03/go-common/pkg/payment"
-	stripesdk "github.com/stripe/stripe-go/v85"
+	stripesdk "github.com/stripe/stripe-go/v87"
 )
 
 // RefundInFull refunds a payment intent's whole charge. Omitting the amount is
@@ -25,7 +25,7 @@ func (p *Provider) RefundInFull(ctx context.Context, in *payment.FullRefund) (*p
 
 	refunded, err := p.client.V1Refunds.Create(ctx, params)
 	if err != nil {
-		return nil, p.fail("stripe refund create failed", err)
+		return nil, p.fail(ctx, "stripe refund create failed", err)
 	}
 
 	return refundToNeutral(refunded), nil
@@ -54,7 +54,7 @@ func (p *Provider) RefundAmount(ctx context.Context, in *payment.PartialRefund) 
 
 	refunded, err := p.client.V1Refunds.Create(ctx, params)
 	if err != nil {
-		return nil, p.fail("stripe partial refund create failed", err)
+		return nil, p.fail(ctx, "stripe partial refund create failed", err)
 	}
 
 	return refundToNeutral(refunded), nil

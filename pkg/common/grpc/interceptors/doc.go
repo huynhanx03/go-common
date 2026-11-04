@@ -1,15 +1,15 @@
 // Package interceptors provides bounded gRPC transport boundaries.
 //
-// Server chains should place correlation and logging before recovery so panic
-// logs inherit the validated correlation ID and configured logger. Recovery
+// Server chains should place request ID and logging before recovery so panic
+// logs inherit the validated request ID and injected logger. Recovery
 // then wraps authentication, authorization, and the application handler:
 //
 //	grpc.ChainUnaryInterceptor(
-//		interceptors.UnaryCorrelationServer(grpccommon.DefaultCorrelationOptions()),
+//		interceptors.UnaryRequestIDServer(grpccommon.DefaultRequestIDOptions()),
 //		interceptors.UnaryLoggingServer(log),
-//		interceptors.UnaryRecoveryServer(),
-//		interceptors.UnaryAuthenticationServer(verifier, source),
-//		interceptors.UnaryAuthorizationServer(authorizer, resolve),
+//		interceptors.UnaryRecoveryServer(log),
+//		interceptors.UnaryAuthenticationServer(checker, source),
+//		interceptors.UnaryAuthorizationServer(checker, resolve),
 //	)
 //
 // Raw credentials, request messages, response messages, and returned error

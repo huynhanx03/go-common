@@ -17,22 +17,16 @@ import (
 // Alphanumeric so url.Values.Encode leaves it readable.
 const redactedValue = "REDACTED"
 
-// RequestLogger logs every HTTP request and injects a per-request logger into context.
-// Each request gets a correlation ID (cid) that travels end to end — reused
-// from the X-Correlation-ID header when an upstream service already set one.
-// Pass the application's root zap logger; it is namespaced under "http".
-func RequestLogger(rootLogger *zap.Logger) gin.HandlerFunc {
-	if rootLogger == nil {
-		rootLogger = zap.L()
-	}
-	base := rootLogger.Named("http")
+// RequestLogger logs each HTTP request with the injected service logger.
+// Envoy supplies X-Request-ID; the middleware carries it into request logs.
+// Pass the application's configured logger.
+func RequestLogger(base *logger.Logger) gin.HandlerFunc {
+	base = base.Named("http")
 
 	return func(c *gin.Context) {
 		start := time.Now()
 
-		ctx := ensureCorrelation(c)
-		ctx = logger.WithContext(ctx, base)
-		c.Request = c.Request.WithContext(ctx)
+		propagateRequestID(c)
 
 		c.Next()
 
@@ -66,13 +60,12 @@ func RequestLogger(rootLogger *zap.Logger) gin.HandlerFunc {
 			fields = append(fields, zap.Int("error_count", len(c.Errors)))
 		}
 
-		reqLogger := logger.FromContext(c.Request.Context())
 		if status >= 500 {
-			reqLogger.Error("request", fields...)
+			base.Error(c.Request.Context(), "request", fields...)
 		} else if status == http.StatusTooManyRequests {
-			reqLogger.Warn("request", fields...)
+			base.Warn(c.Request.Context(), "request", fields...)
 		} else {
-			reqLogger.Info("request", fields...)
+			base.Info(c.Request.Context(), "request", fields...)
 		}
 	}
 }

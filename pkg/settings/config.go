@@ -19,22 +19,54 @@ type GRPCService struct {
 }
 
 type JWT struct {
-	Secret         string          `mapstructure:"secret"`
-	PrivateKeyPath string          `mapstructure:"private_key_path"`
-	PublicKeyPath  string          `mapstructure:"public_key_path"`
-	PrivateKey     *rsa.PrivateKey `mapstructure:"-"`
-	PublicKey      *rsa.PublicKey  `mapstructure:"-"`
+	Secret            string          `mapstructure:"secret"`
+	Issuer            string          `mapstructure:"issuer"`
+	Audience          string          `mapstructure:"audience"`
+	KeyID             string          `mapstructure:"key_id"`
+	AccessTTLSeconds  int             `mapstructure:"access_ttl_seconds"`
+	RefreshTTLSeconds int             `mapstructure:"refresh_ttl_seconds"`
+	MaxTTLSeconds     int             `mapstructure:"max_ttl_seconds"`
+	LeewaySeconds     int             `mapstructure:"leeway_seconds"`
+	MaxTokenBytes     int             `mapstructure:"max_token_bytes"`
+	PrivateKeyPath    string          `mapstructure:"private_key_path"`
+	PublicKeyPath     string          `mapstructure:"public_key_path"`
+	PrivateKey        *rsa.PrivateKey `mapstructure:"-"`
+	PublicKey         *rsa.PublicKey  `mapstructure:"-"`
 }
 
-// WideColumn is the configuration for Wide Column databases (Cassandra/ScyllaDB)
-type WideColumn struct {
-	Hosts    []string `mapstructure:"hosts"`
-	Keyspace string   `mapstructure:"keyspace"`
-	Username string   `mapstructure:"username"`
-	Password string   `mapstructure:"password"`
-	Port     int      `mapstructure:"port"`
-	Timeout  int      `mapstructure:"timeout"`
-	Retries  int      `mapstructure:"retries"`
+type Password struct {
+	MemoryKiB     uint32 `mapstructure:"memory_kib"`
+	Iterations    uint32 `mapstructure:"iterations"`
+	Parallelism   uint8  `mapstructure:"parallelism"`
+	MaxConcurrent int    `mapstructure:"max_concurrent"`
+}
+
+// Casbin configures Casbin policy loading.
+type Casbin struct {
+	TableName   string `mapstructure:"table_name"`   // Empty uses the adapter default.
+	PolicyLimit int    `mapstructure:"policy_limit"` // Zero uses the adapter default.
+}
+
+// DefaultToggleRefreshIntervalSeconds is the SDK's refresh interval when unset.
+const DefaultToggleRefreshIntervalSeconds = 15
+
+// DefaultToggleSourceTimeoutSeconds bounds a source load when unset.
+const DefaultToggleSourceTimeoutSeconds = 5
+
+// Toggle configures local feature flag evaluation for one service scope.
+type Toggle struct {
+	Namespace              string `mapstructure:"namespace"`
+	Environment            Env    `mapstructure:"environment"`
+	AppName                string `mapstructure:"app_name"`
+	RefreshIntervalSeconds int    `mapstructure:"refresh_interval_seconds"` // Zero uses DefaultToggleRefreshIntervalSeconds.
+	SourceTimeoutSeconds   int    `mapstructure:"source_timeout_seconds"`   // Zero uses DefaultToggleSourceTimeoutSeconds.
+}
+
+// I18n configures one domain's lazy locale client. Zero seconds use package defaults.
+type I18n struct {
+	Domain               string `mapstructure:"domain"`
+	CacheTTLSeconds      int    `mapstructure:"cache_ttl_seconds"`
+	SourceTimeoutSeconds int    `mapstructure:"source_timeout_seconds"`
 }
 
 // Database is the configuration for the database
@@ -103,6 +135,7 @@ type Logger struct {
 
 // Redis is the configuration for Redis
 type Redis struct {
+	Namespace       string   `mapstructure:"namespace"`
 	Addrs           []string `mapstructure:"addrs"`
 	MasterName      string   `mapstructure:"master_name"`
 	Password        string   `mapstructure:"password"`
@@ -130,13 +163,6 @@ type Kafka struct {
 	MaxProcessingTime     int      `mapstructure:"max_processing_time"`     // Milliseconds
 	ConsumerBatchSize     int      `mapstructure:"consumer_batch_size"`     // Number of messages
 	ConsumerBatchInterval int      `mapstructure:"consumer_batch_interval"` // Milliseconds
-}
-
-// Elasticsearch is the configuration for Elasticsearch
-type Elasticsearch struct {
-	Addresses []string `mapstructure:"addresses"`
-	Username  string   `mapstructure:"username"`
-	Password  string   `mapstructure:"password"`
 }
 
 type Snowflake struct {

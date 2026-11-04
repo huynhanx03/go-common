@@ -17,6 +17,17 @@ func TestNewCachedTimerRejectsNonPositiveStep(t *testing.T) {
 	}
 }
 
+func TestSystemTimerReturnsCurrentUnixNanoseconds(t *testing.T) {
+	t.Parallel()
+
+	before := time.Now().UnixNano()
+	got := (SystemTimer{}).Now()
+	after := time.Now().UnixNano()
+	if got < before || got > after {
+		t.Fatalf("SystemTimer.Now() = %d; want timestamp in [%d, %d]", got, before, after)
+	}
+}
+
 func TestCachedTimerStalenessAndConcurrentStopAreBounded(t *testing.T) {
 	t.Parallel()
 

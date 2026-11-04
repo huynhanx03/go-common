@@ -1,4 +1,4 @@
-.PHONY: benchmarks coverage dependency-check format-check fuzz-seeds test test-integration test-race vet verify verify-docs workflow-check
+.PHONY: benchmarks coverage dependency-check format-check fuzz-seeds test-integration test-race test-unit vet verify workflow-check
 
 format-check:
 	test -z "$$(gofmt -l $$(find . -name '*.go' -not -path './vendor/*'))"
@@ -14,25 +14,22 @@ workflow-check:
 	go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
 	./scripts/verify-workflows.sh
 
-test:
+test-unit:
 	go test ./...
 
 test-race:
 	go test -race ./...
 
 test-integration:
-	./scripts/test-integration.sh
+	go test -tags=integration ./...
 
 fuzz-seeds:
 	go test ./pkg/cdc ./pkg/common/http/request ./pkg/common/websocket ./pkg/mq/forge -run '^Fuzz' -count=1
-
-verify-docs:
-	./scripts/verify-docs.sh
 
 coverage:
 	./scripts/verify-coverage.sh
 
 benchmarks:
-	./scripts/run-benchmarks.sh
+	go test -tags=benchmark -run=^$$ -bench=. -benchmem -count=5 ./...
 
-verify: format-check vet dependency-check workflow-check test fuzz-seeds verify-docs
+verify: format-check vet dependency-check workflow-check test-unit fuzz-seeds

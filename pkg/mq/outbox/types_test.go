@@ -30,28 +30,28 @@ func TestPublishErrorIsBoundedAndPreservesCause(t *testing.T) {
 func TestClaimAndPublishAckCloneBoundedStringsAtTrustBoundary(t *testing.T) {
 	t.Parallel()
 
-	backing := []byte("message-1|events|cid-1|key|value|token|reference")
+	backing := []byte("message-1|events|correlation-1|key|value|token|reference")
 	alias := func(start, end int) string {
 		return unsafe.String(unsafe.SliceData(backing[start:end]), end-start)
 	}
 	claimed := ClaimedMessage{
-		Lease: Lease{MessageID: alias(0, 9), Token: alias(33, 38), Attempt: 1},
+		Lease: Lease{MessageID: alias(0, 9), Token: alias(41, 46), Attempt: 1},
 		Message: Message{
 			ID: alias(0, 9), Destination: alias(10, 16),
 			Metadata: Metadata{
-				CorrelationID: alias(17, 22),
-				Attributes:    []Attribute{{Key: alias(23, 26), Value: alias(27, 32)}},
+				CorrelationID: alias(17, 30),
+				Attributes:    []Attribute{{Key: alias(31, 34), Value: alias(35, 40)}},
 			},
 		},
 	}
 	owned := cloneClaimedMessage(claimed)
-	ack := normalizedPublishAck(PublishAck{Reference: alias(39, len(backing))})
+	ack := normalizedPublishAck(PublishAck{Reference: alias(47, len(backing))})
 	for index := range backing {
 		backing[index] = 'x'
 	}
 	if owned.Lease.MessageID != "message-1" || owned.Lease.Token != "token" ||
 		owned.Message.ID != "message-1" || owned.Message.Destination != "events" ||
-		owned.Message.Metadata.CorrelationID != "cid-1" ||
+		owned.Message.Metadata.CorrelationID != "correlation-1" ||
 		owned.Message.Metadata.Attributes[0] != (Attribute{Key: "key", Value: "value"}) ||
 		ack.Reference != "reference" {
 		t.Fatalf("owned values retained caller backing storage: owned=%+v ack=%+v", owned, ack)

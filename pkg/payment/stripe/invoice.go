@@ -6,7 +6,7 @@ import (
 
 	"github.com/huynhanx03/go-common/pkg/common/apperr"
 	"github.com/huynhanx03/go-common/pkg/payment"
-	stripesdk "github.com/stripe/stripe-go/v85"
+	stripesdk "github.com/stripe/stripe-go/v87"
 )
 
 const taxBehaviorInclusive = "inclusive"
@@ -45,7 +45,7 @@ func (p *Provider) ListOpenInvoices(ctx context.Context, in *payment.OpenInvoice
 
 	for live, err := range p.client.V1Invoices.List(ctx, params).All(ctx) {
 		if err != nil {
-			return nil, p.fail("stripe invoice list failed", err)
+			return nil, p.fail(ctx, "stripe invoice list failed", err)
 		}
 
 		if mapped := invoiceToNeutral(live); mapped != nil {
@@ -108,7 +108,7 @@ func (p *Provider) PayOutOfBand(ctx context.Context, in *payment.InvoiceRef) (*p
 
 	paid, err := p.client.V1Invoices.Pay(ctx, in.InvoiceRef, params)
 	if err != nil {
-		return nil, p.fail("stripe invoice pay out of band failed", err)
+		return nil, p.fail(ctx, "stripe invoice pay out of band failed", err)
 	}
 
 	return invoiceToNeutral(paid), nil
@@ -125,7 +125,7 @@ func (p *Provider) Void(ctx context.Context, in *payment.InvoiceRef) (*payment.I
 
 	voided, err := p.client.V1Invoices.VoidInvoice(ctx, in.InvoiceRef, params)
 	if err != nil {
-		return nil, p.fail("stripe invoice void failed", err)
+		return nil, p.fail(ctx, "stripe invoice void failed", err)
 	}
 
 	return invoiceToNeutral(voided), nil
@@ -134,7 +134,7 @@ func (p *Provider) Void(ctx context.Context, in *payment.InvoiceRef) (*payment.I
 func (p *Provider) retrieveInvoice(ctx context.Context, ref string, params *stripesdk.InvoiceRetrieveParams) (*payment.Invoice, *apperr.AppError) {
 	live, err := p.client.V1Invoices.Retrieve(ctx, ref, params)
 	if err != nil {
-		return nil, p.fail("stripe invoice retrieve failed", err)
+		return nil, p.fail(ctx, "stripe invoice retrieve failed", err)
 	}
 
 	return invoiceToNeutral(live), nil
@@ -143,7 +143,7 @@ func (p *Provider) retrieveInvoice(ctx context.Context, ref string, params *stri
 func (p *Provider) createInvoicePreview(ctx context.Context, params *stripesdk.InvoiceCreatePreviewParams, logMsg string) (*payment.Invoice, *apperr.AppError) {
 	preview, err := p.client.V1Invoices.CreatePreview(ctx, params)
 	if err != nil {
-		return nil, p.fail(logMsg, err)
+		return nil, p.fail(ctx, logMsg, err)
 	}
 
 	return invoiceToNeutral(preview), nil
@@ -253,7 +253,10 @@ func invoiceTotalTaxRateRef(tax *stripesdk.InvoiceTotalTax) string {
 		return ""
 	}
 
-	return tax.TaxRateDetails.TaxRate
+	if tax.TaxRateDetails.TaxRate == nil {
+		return ""
+	}
+	return tax.TaxRateDetails.TaxRate.ID
 }
 
 func invoiceSubscriptionMetadata(src *stripesdk.Invoice) map[string]string {
@@ -341,8 +344,8 @@ func invoiceLineTaxesToNeutral(src *stripesdk.InvoiceLineItem) []payment.TaxAmou
 		}
 
 		rateRef := ""
-		if tax.TaxRateDetails != nil {
-			rateRef = tax.TaxRateDetails.TaxRate
+		if tax.TaxRateDetails != nil && tax.TaxRateDetails.TaxRate != nil {
+			rateRef = tax.TaxRateDetails.TaxRate.ID
 		}
 
 		out = append(out, payment.TaxAmount{

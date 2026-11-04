@@ -56,7 +56,7 @@ var metricNamePattern = regexp.MustCompile(`^[a-zA-Z_:][a-zA-Z0-9_:]*$`)
 var labelNamePattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
 var sensitiveLabelNames = map[string]struct{}{
-	"authorization": {}, "cid": {}, "cookie": {}, "correlation_id": {},
+	"authorization": {}, "cookie": {}, "correlation_id": {},
 	"email": {}, "id": {}, "ip": {}, "ip_address": {}, "request_id": {},
 	"secret": {}, "span_id": {}, "token": {}, "trace_id": {},
 }

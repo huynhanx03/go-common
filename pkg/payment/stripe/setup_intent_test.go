@@ -39,8 +39,8 @@ func TestCreateSetupIntentBuildsOffSessionRequest(t *testing.T) {
 		t.Fatalf("usage = %q", got)
 	}
 
-	if got := captured.formValue("payment_method_types[0]"); got != "card" {
-		t.Fatalf("payment_method_types[0] = %q", got)
+	if got := captured.formValue("allowed_payment_method_types[0]"); got != "card" {
+		t.Fatalf("allowed_payment_method_types[0] = %q", got)
 	}
 
 	if captured.idempotencyKey != "setup:1" {

@@ -12,13 +12,14 @@ import (
 	"time"
 
 	"github.com/huynhanx03/go-common/pkg/common/grpc/interceptors"
-	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/stats"
+
+	"github.com/huynhanx03/go-common/pkg/logger"
 )
 
 const (
@@ -35,7 +36,7 @@ type Config struct {
 	Name                 string
 	Address              string
 	TLS                  *tls.Config
-	Logger               *zap.Logger
+	Logger               *logger.Logger
 	StatsHandler         stats.Handler
 	MaxRecvBytes         int
 	MaxSendBytes         int
@@ -101,12 +102,10 @@ func New(config Config, register func(*grpc.Server)) (*Server, error) {
 	}
 	unary := make([]grpc.UnaryServerInterceptor, 0, len(config.UnaryInterceptors)+2)
 	stream := make([]grpc.StreamServerInterceptor, 0, len(config.StreamInterceptors)+2)
-	if config.Logger != nil {
-		unary = append(unary, interceptors.UnaryLoggingServer(config.Logger))
-		stream = append(stream, interceptors.StreamLoggingServer(config.Logger))
-	}
-	unary = append(unary, interceptors.UnaryRecoveryServer())
-	stream = append(stream, interceptors.StreamRecoveryServer())
+	unary = append(unary, interceptors.UnaryLoggingServer(config.Logger))
+	stream = append(stream, interceptors.StreamLoggingServer(config.Logger))
+	unary = append(unary, interceptors.UnaryRecoveryServer(config.Logger))
+	stream = append(stream, interceptors.StreamRecoveryServer(config.Logger))
 	unary = append(unary, config.UnaryInterceptors...)
 	stream = append(stream, config.StreamInterceptors...)
 	options = append(options, grpc.ChainUnaryInterceptor(unary...), grpc.ChainStreamInterceptor(stream...))
@@ -119,7 +118,7 @@ func New(config Config, register func(*grpc.Server)) (*Server, error) {
 }
 
 func validate(config Config, register func(*grpc.Server)) error {
-	if config.Name == "" || len(config.Name) > 64 || config.Address == "" || register == nil {
+	if config.Name == "" || len(config.Name) > 64 || config.Address == "" || register == nil || config.Logger == nil {
 		return fmt.Errorf("grpc server: invalid configuration")
 	}
 	if _, _, err := net.SplitHostPort(config.Address); err != nil {

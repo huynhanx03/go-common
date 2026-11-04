@@ -47,7 +47,7 @@ type StatementObservation struct {
 type StatementObserver func(context.Context, StatementObservation)
 
 // WrapLogging decorates a driver so every statement is timed and logged
-// through the context logger — lines carry the request's cid automatically:
+// with request and trace identity from ctx:
 //
 //   - failed statements → Error
 //   - statements slower than slowThreshold (0 = 200ms default) → Warn
@@ -59,15 +59,16 @@ type StatementObserver func(context.Context, StatementObservation)
 // opaque payloads even in development.
 //
 //	drv, _ := ent.NewDriver(cfg)
-//	client := gen.NewClient(gen.Driver(ent.WrapLogging(drv, 0)))
-func WrapLogging(drv dialect.Driver, slowThreshold time.Duration) dialect.Driver {
-	return WrapObservedLogging(drv, slowThreshold, nil)
+//	client := gen.NewClient(gen.Driver(ent.WrapLogging(log, drv, 0)))
+func WrapLogging(log *logger.Logger, drv dialect.Driver, slowThreshold time.Duration) dialect.Driver {
+	return WrapObservedLogging(log, drv, slowThreshold, nil)
 }
 
 // WrapObservedLogging is WrapLogging plus a generic completion observer. The
 // observer API intentionally omits SQL and arguments, keeping this reusable in
 // services with stricter data handling rules.
 func WrapObservedLogging(
+	log *logger.Logger,
 	drv dialect.Driver,
 	slowThreshold time.Duration,
 	observer StatementObserver,
@@ -77,6 +78,7 @@ func WrapObservedLogging(
 	}
 	return &logDriver{
 		Driver:   drv,
+		logger:   log,
 		slow:     slowThreshold,
 		now:      time.Now,
 		observer: observer,
@@ -85,6 +87,7 @@ func WrapObservedLogging(
 
 type logDriver struct {
 	dialect.Driver
+	logger   *logger.Logger
 	slow     time.Duration
 	now      func() time.Time
 	observer StatementObserver
@@ -94,7 +97,7 @@ func (d *logDriver) Exec(ctx context.Context, query string, args, v any) error {
 	start := d.now()
 	err := d.Driver.Exec(ctx, query, args, v)
 	took := d.now().Sub(start)
-	logQuery(ctx, d.slow, query, args, took, err)
+	logQuery(d.logger, ctx, d.slow, query, args, took, err)
 	notifyObserver(ctx, d.observer, StatementObservation{
 		Class: statementClass(query), Duration: took, Err: err,
 	})
@@ -105,7 +108,7 @@ func (d *logDriver) Query(ctx context.Context, query string, args, v any) error 
 	start := d.now()
 	err := d.Driver.Query(ctx, query, args, v)
 	took := d.now().Sub(start)
-	logQuery(ctx, d.slow, query, args, took, err)
+	logQuery(d.logger, ctx, d.slow, query, args, took, err)
 	notifyObserver(ctx, d.observer, StatementObservation{
 		Class: statementClass(query), Duration: took, Err: err,
 	})
@@ -130,7 +133,7 @@ func (d *logDriver) ExecContext(
 	start := d.now()
 	result, err := drv.ExecContext(ctx, query, args...)
 	took := d.now().Sub(start)
-	logQuery(ctx, d.slow, query, args, took, err)
+	logQuery(d.logger, ctx, d.slow, query, args, took, err)
 	notifyObserver(ctx, d.observer, StatementObservation{
 		Class: statementClass(query), Duration: took, Err: err,
 	})
@@ -151,7 +154,7 @@ func (d *logDriver) QueryContext(
 	start := d.now()
 	rows, err := drv.QueryContext(ctx, query, args...)
 	took := d.now().Sub(start)
-	logQuery(ctx, d.slow, query, args, took, err)
+	logQuery(d.logger, ctx, d.slow, query, args, took, err)
 	notifyObserver(ctx, d.observer, StatementObservation{
 		Class: statementClass(query), Duration: took, Err: err,
 	})
@@ -168,7 +171,7 @@ func (d *logDriver) Tx(ctx context.Context) (dialect.Tx, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &logTx{Tx: t, slow: d.slow, now: d.now, observer: d.observer}, nil
+	return &logTx{Tx: t, logger: d.logger, slow: d.slow, now: d.now, observer: d.observer}, nil
 }
 
 // BeginTx forwards transaction options when the underlying driver supports
@@ -189,7 +192,7 @@ func (d *logDriver) BeginTx(ctx context.Context, opts *sql.TxOptions) (dialect.T
 	if err != nil {
 		return nil, err
 	}
-	return &logTx{Tx: t, slow: d.slow, now: d.now, observer: d.observer}, nil
+	return &logTx{Tx: t, logger: d.logger, slow: d.slow, now: d.now, observer: d.observer}, nil
 }
 
 // UnwrapLogging removes any number of logging wrappers and returns the
@@ -207,6 +210,7 @@ func UnwrapLogging(drv dialect.Driver) dialect.Driver {
 
 type logTx struct {
 	dialect.Tx
+	logger   *logger.Logger
 	slow     time.Duration
 	now      func() time.Time
 	observer StatementObserver
@@ -216,7 +220,7 @@ func (t *logTx) Exec(ctx context.Context, query string, args, v any) error {
 	start := t.now()
 	err := t.Tx.Exec(ctx, query, args, v)
 	took := t.now().Sub(start)
-	logQuery(ctx, t.slow, query, args, took, err)
+	logQuery(t.logger, ctx, t.slow, query, args, took, err)
 	notifyObserver(ctx, t.observer, StatementObservation{
 		Class: statementClass(query), Duration: took, Err: err,
 	})
@@ -227,7 +231,7 @@ func (t *logTx) Query(ctx context.Context, query string, args, v any) error {
 	start := t.now()
 	err := t.Tx.Query(ctx, query, args, v)
 	took := t.now().Sub(start)
-	logQuery(ctx, t.slow, query, args, took, err)
+	logQuery(t.logger, ctx, t.slow, query, args, took, err)
 	notifyObserver(ctx, t.observer, StatementObservation{
 		Class: statementClass(query), Duration: took, Err: err,
 	})
@@ -251,7 +255,7 @@ func (t *logTx) ExecContext(
 	start := t.now()
 	result, err := tx.ExecContext(ctx, query, args...)
 	took := t.now().Sub(start)
-	logQuery(ctx, t.slow, query, args, took, err)
+	logQuery(t.logger, ctx, t.slow, query, args, took, err)
 	notifyObserver(ctx, t.observer, StatementObservation{
 		Class: statementClass(query), Duration: took, Err: err,
 	})
@@ -272,7 +276,7 @@ func (t *logTx) QueryContext(
 	start := t.now()
 	rows, err := tx.QueryContext(ctx, query, args...)
 	took := t.now().Sub(start)
-	logQuery(ctx, t.slow, query, args, took, err)
+	logQuery(t.logger, ctx, t.slow, query, args, took, err)
 	notifyObserver(ctx, t.observer, StatementObservation{
 		Class: statementClass(query), Duration: took, Err: err,
 	})
@@ -304,7 +308,7 @@ func statementClass(query string) StatementClass {
 	}
 }
 
-func logQuery(ctx context.Context, slow time.Duration, query string, _ any, took time.Duration, err error) {
+func logQuery(log *logger.Logger, ctx context.Context, slow time.Duration, query string, _ any, took time.Duration, err error) {
 	fields := safeQueryFields(query, took)
 	switch {
 	case err != nil:
@@ -314,11 +318,11 @@ func logQuery(ctx context.Context, slow time.Duration, query string, _ any, took
 			return
 		}
 		fields = append(fields, zap.String("error_type", fmt.Sprintf("%T", err)))
-		logger.FromContext(ctx).Error("query failed", fields...)
+		log.Error(ctx, "query failed", fields...)
 	case took >= slow:
-		logger.FromContext(ctx).Warn("slow query", fields...)
+		log.Warn(ctx, "slow query", fields...)
 	default:
-		logger.FromContext(ctx).Debug("query", fields...)
+		log.Debug(ctx, "query", fields...)
 	}
 }
 

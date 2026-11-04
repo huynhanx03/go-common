@@ -16,7 +16,7 @@ func TestCORSExactOriginsAndVary(t *testing.T) {
 		AllowedOrigins:   []string{"https://app.example.com"},
 		AllowedMethods:   []string{http.MethodGet, http.MethodPost},
 		AllowedHeaders:   []string{"Content-Type", "X-CSRF-Token"},
-		ExposedHeaders:   []string{"X-Correlation-ID"},
+		ExposedHeaders:   []string{"X-Request-ID"},
 		AllowCredentials: true,
 		MaxAge:           time.Hour,
 	})

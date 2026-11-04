@@ -90,7 +90,7 @@ func TestNewValidatesDependenciesAndOptions(t *testing.T) {
 			if test.mutate != nil {
 				test.mutate(&options)
 			}
-			_, err := New(test.store, test.publisher, nil, options)
+			_, err := New(testLog, test.store, test.publisher, nil, options)
 			if !errors.Is(err, ErrInvalidOptions) {
 				t.Fatalf("New error = %v, want ErrInvalidOptions", err)
 			}
@@ -112,7 +112,7 @@ func TestNewAcceptsValidOptionsAndHelpersDelegate(t *testing.T) {
 		return PublishAck{Reference: message.ID}, nil
 	})
 
-	relay, err := New(inertStore{}, publisher, wakeup, validOptions())
+	relay, err := New(testLog, inertStore{}, publisher, wakeup, validOptions())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

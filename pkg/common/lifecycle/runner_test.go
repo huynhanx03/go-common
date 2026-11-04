@@ -3,6 +3,8 @@ package lifecycle
 import (
 	"context"
 	"errors"
+	"github.com/huynhanx03/go-common/pkg/logger"
+	"go.uber.org/zap"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -35,7 +37,7 @@ func (component testComponent) Shutdown(ctx context.Context) error {
 
 func newTestRunner(t *testing.T, options Options) *Runner {
 	t.Helper()
-	runner, err := New(options)
+	runner, err := New(logger.Wrap(zap.NewNop()), options)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -377,7 +379,7 @@ func TestRunnerShutdownIsBoundedAndIdempotent(t *testing.T) {
 func TestRunnerValidatesRegistrationAndState(t *testing.T) {
 	t.Parallel()
 
-	if _, err := New(Options{ShutdownTimeout: -time.Second}); err == nil {
+	if _, err := New(logger.Wrap(zap.NewNop()), Options{ShutdownTimeout: -time.Second}); err == nil {
 		t.Fatal("New accepted negative shutdown timeout")
 	}
 	runner := newTestRunner(t, Options{})

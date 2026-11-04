@@ -41,7 +41,7 @@ func (*recordingTransport) CloseNow() error { return nil }
 func TestShutdownDrainsMailboxAndClosesGoingAway(t *testing.T) {
 	t.Parallel()
 
-	hub, err := NewHub(mailboxOptions())
+	hub, err := NewHub(testLogger(), mailboxOptions())
 	if err != nil {
 		t.Fatalf("NewHub: %v", err)
 	}

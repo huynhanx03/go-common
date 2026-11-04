@@ -14,7 +14,7 @@ import (
 	"github.com/huynhanx03/go-common/pkg/common/apperr"
 	"github.com/huynhanx03/go-common/pkg/logger"
 	"github.com/huynhanx03/go-common/pkg/payment"
-	stripesdk "github.com/stripe/stripe-go/v85"
+	stripesdk "github.com/stripe/stripe-go/v87"
 )
 
 // ProviderName is the key this driver registers under.
@@ -48,15 +48,18 @@ func init() {
 // payment.EventDecoder. Construct it with New.
 type Provider struct {
 	client        *stripesdk.Client
-	logger        *logger.LoggerZap
+	logger        *logger.Logger
 	webhookSecret string
 }
 
 // New builds a Stripe provider from cfg. It requires cfg.APIKey; cfg.WebhookSecret
-// is required only to verify webhooks (VerifyAndDecode). The logger is optional.
+// is required only to verify webhooks (VerifyAndDecode). A logger is required.
 func New(cfg payment.Config) (*Provider, *apperr.AppError) {
 	if cfg.APIKey == "" {
 		return nil, payment.Invalid("stripe: missing API key")
+	}
+	if cfg.Logger == nil {
+		return nil, payment.Invalid("stripe: logger is required")
 	}
 
 	return &Provider{
@@ -68,7 +71,7 @@ func New(cfg payment.Config) (*Provider, *apperr.AppError) {
 
 // newWithClient builds a provider around an already-configured SDK client. It
 // exists for tests that point the client at a stub backend.
-func newWithClient(client *stripesdk.Client, log *logger.LoggerZap, webhookSecret string) *Provider {
+func newWithClient(client *stripesdk.Client, log *logger.Logger, webhookSecret string) *Provider {
 	return &Provider{client: client, logger: log, webhookSecret: webhookSecret}
 }
 

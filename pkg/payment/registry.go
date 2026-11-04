@@ -16,7 +16,7 @@ type Config struct {
 	APIKey        string
 	WebhookSecret string
 	Options       map[string]string
-	Logger        *logger.LoggerZap
+	Logger        *logger.Logger
 }
 
 // Option returns an Options value and whether it was set.

@@ -29,6 +29,7 @@ type hubState struct {
 }
 
 type Hub struct {
+	logger         *logger.Logger
 	options        Options
 	allowedOrigins map[string]struct{}
 	trustedProxies []netip.Prefix
@@ -61,7 +62,10 @@ type Hub struct {
 	handlerRegistry    map[string]*registeredHandler
 }
 
-func NewHub(options Options) (*Hub, error) {
+func NewHub(log *logger.Logger, options Options) (*Hub, error) {
+	if log == nil {
+		return nil, ErrInvalidOptions
+	}
 	normalized, err := NormalizeOptions(options)
 	if err != nil {
 		return nil, err
@@ -75,6 +79,7 @@ func NewHub(options Options) (*Hub, error) {
 		origins[origin] = struct{}{}
 	}
 	return &Hub{
+		logger:         log,
 		options:        normalized,
 		allowedOrigins: origins,
 		trustedProxies: trustedProxies,
@@ -257,5 +262,5 @@ func (hub *Hub) finalizeConnection(connection *Conn) {
 		logger.String("close_code", strconv.Itoa(closeCode)),
 		logger.String("draining", strconv.FormatBool(draining)),
 	)
-	logger.FromContext(logContext).Info("websocket connection closed")
+	hub.logger.Info(logContext, "websocket connection closed")
 }

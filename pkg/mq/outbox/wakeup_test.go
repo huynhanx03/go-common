@@ -85,7 +85,7 @@ func TestWakeupAcceleratesPollingButPollingRemainsCorrectnessFallback(t *testing
 			}
 			options := validOptions()
 			options.PollInterval = test.poll
-			relay, err := New(store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
+			relay, err := New(testLog, store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
 				close(published)
 				return PublishAck{}, nil
 			}), test.wakeup, options)
@@ -127,7 +127,7 @@ func TestWakeupFailuresAreRateLimited(t *testing.T) {
 	}}
 	options := validOptions()
 	options.PollInterval = 10 * time.Millisecond
-	relay, err := New(store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
+	relay, err := New(testLog, store, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
 		return PublishAck{}, nil
 	}), wakeup, options)
 	if err != nil {
@@ -152,7 +152,7 @@ func TestShutdownDoesNotDependOnMisbehavingWakeup(t *testing.T) {
 		<-release
 		return nil
 	})
-	relay, err := New(inertStore{}, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
+	relay, err := New(testLog, inertStore{}, PublisherFunc(func(context.Context, Message) (PublishAck, error) {
 		return PublishAck{}, nil
 	}), wakeup, validOptions())
 	if err != nil {

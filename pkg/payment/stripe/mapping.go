@@ -4,7 +4,7 @@ import (
 	"time"
 
 	"github.com/huynhanx03/go-common/pkg/payment"
-	stripesdk "github.com/stripe/stripe-go/v85"
+	stripesdk "github.com/stripe/stripe-go/v87"
 )
 
 // moneyOf builds a neutral Money from a Stripe minor-unit amount and currency.

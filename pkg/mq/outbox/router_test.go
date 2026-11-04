@@ -33,7 +33,7 @@ func TestRouterFansOutInDeclarationOrderWithImmutableMessages(t *testing.T) {
 			return nil
 		},
 	}
-	router, err := NewRouter(first, second)
+	router, err := NewRouter(testLog, first, second)
 	if err != nil {
 		t.Fatalf("NewRouter: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestRouterFansOutInDeclarationOrderWithImmutableMessages(t *testing.T) {
 func TestRouterFailsClosedForMissingRouteAndPanic(t *testing.T) {
 	t.Parallel()
 
-	router, err := NewRouter(Route{
+	router, err := NewRouter(testLog, Route{
 		Destination: "account.changed.v1",
 		HandlerName: "projection",
 		Handle: func(context.Context, Message) error {
@@ -97,7 +97,7 @@ func TestRouterRejectsInvalidAndDuplicateRoutes(t *testing.T) {
 		{{Destination: valid.Destination, HandlerName: valid.HandlerName}},
 		{valid, valid},
 	} {
-		if _, err := NewRouter(routes...); !errors.Is(err, ErrInvalidRouter) {
+		if _, err := NewRouter(testLog, routes...); !errors.Is(err, ErrInvalidRouter) {
 			t.Fatalf("NewRouter(%+v) error = %v, want ErrInvalidRouter", routes, err)
 		}
 	}
@@ -106,7 +106,7 @@ func TestRouterRejectsInvalidAndDuplicateRoutes(t *testing.T) {
 func TestRouterDestinationsAreStableAndImmutable(t *testing.T) {
 	t.Parallel()
 
-	router, err := NewRouter(
+	router, err := NewRouter(testLog,
 		Route{
 			Destination: "z.changed.v1", HandlerName: "z",
 			Handle: func(context.Context, Message) error { return nil },

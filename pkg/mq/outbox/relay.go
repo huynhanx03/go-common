@@ -2,8 +2,6 @@ package outbox
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"strconv"
@@ -11,7 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/huynhanx03/go-common/pkg/correlation"
+	"go.uber.org/zap"
+
 	"github.com/huynhanx03/go-common/pkg/logger"
 )
 
@@ -37,6 +36,7 @@ const (
 // A Relay has a single-use Run lifecycle and supports concurrent, idempotent
 // Shutdown calls.
 type Relay struct {
+	logger               *logger.Logger
 	store                Store
 	publisher            Publisher
 	wakeup               Wakeup
@@ -52,7 +52,10 @@ type Relay struct {
 }
 
 // New constructs a relay after validating dependencies and operation budgets.
-func New(store Store, publisher Publisher, wakeup Wakeup, options Options) (*Relay, error) {
+func New(log *logger.Logger, store Store, publisher Publisher, wakeup Wakeup, options Options) (*Relay, error) {
+	if log == nil {
+		return nil, ErrInvalidOptions
+	}
 	if err := validateOptions(store, publisher, options); err != nil {
 		return nil, err
 	}
@@ -60,7 +63,8 @@ func New(store Store, publisher Publisher, wakeup Wakeup, options Options) (*Rel
 	options.Owner = strings.Clone(options.Owner)
 	options.Destinations = cloneStrings(options.Destinations)
 	return &Relay{
-		store: store, publisher: publisher, wakeup: wakeup, options: options,
+		logger: log,
+		store:  store, publisher: publisher, wakeup: wakeup, options: options,
 		destinationAllowlist: destinationSet(options.Destinations),
 		state:                stateNew, done: make(chan struct{}),
 	}, nil
@@ -100,11 +104,11 @@ func (relay *Relay) Run(ctx context.Context) error {
 		logger.String("relay", relay.options.Name),
 		logger.String("owner", relay.options.Owner),
 	)
-	logger.FromContext(runCtx).Info("outbox relay started")
+	relay.logger.Info(runCtx, "outbox relay started")
 
 	runErr := relay.runLoop(runCtx, cancel)
 	cancel()
-	logger.FromContext(runCtx).Info("outbox relay stopped")
+	relay.logger.Info(runCtx, "outbox relay stopped")
 
 	relay.mu.Lock()
 	relay.state = stateStopped
@@ -198,7 +202,7 @@ func (relay *Relay) runLoop(ctx context.Context, cancel context.CancelFunc) erro
 		claimed, err := relay.claim(ctx, limit)
 		if err != nil {
 			if len(claimed) > 0 {
-				logger.FromContext(ctx).Error("outbox store returned claims with an error")
+				relay.logger.Error(ctx, "outbox store returned claims with an error")
 				fatalErr = fmt.Errorf(
 					"%w: claim returned %d messages with an error",
 					ErrStoreContract,
@@ -215,7 +219,7 @@ func (relay *Relay) runLoop(ctx context.Context, cancel context.CancelFunc) erro
 			continue
 		}
 		if len(claimed) > limit {
-			logger.FromContext(ctx).Error("outbox store exceeded claim limit")
+			relay.logger.Error(ctx, "outbox store exceeded claim limit")
 			fatalErr = fmt.Errorf(
 				"%w: claim returned %d messages for limit %d",
 				ErrStoreContract,
@@ -233,20 +237,20 @@ func (relay *Relay) runLoop(ctx context.Context, cancel context.CancelFunc) erro
 		seenMessageIDs := make(map[string]struct{}, len(claimed))
 		for _, item := range claimed {
 			if err := validateLease(item.Lease); err != nil {
-				logger.FromContext(ctx).Error("outbox store returned an invalid lease")
+				relay.logger.Error(ctx, "outbox store returned an invalid lease")
 				fatalErr = fmt.Errorf("%w: invalid lease", ErrStoreContract)
 				cancel()
 				break
 			}
 			if item.Lease.MessageID != item.Message.ID {
-				logger.FromContext(ctx).Error("outbox store returned mismatched message identity")
+				relay.logger.Error(ctx, "outbox store returned mismatched message identity")
 				fatalErr = fmt.Errorf("%w: lease and message identity differ", ErrStoreContract)
 				cancel()
 				break
 			}
 			messageID := strings.Clone(item.Lease.MessageID)
 			if _, duplicate := seenMessageIDs[messageID]; duplicate {
-				logger.FromContext(ctx).Error("outbox store returned duplicate message identity")
+				relay.logger.Error(ctx, "outbox store returned duplicate message identity")
 				fatalErr = fmt.Errorf("%w: duplicate message identity", ErrStoreContract)
 				cancel()
 				break
@@ -254,7 +258,7 @@ func (relay *Relay) runLoop(ctx context.Context, cancel context.CancelFunc) erro
 			seenMessageIDs[messageID] = struct{}{}
 			if len(relay.destinationAllowlist) > 0 {
 				if _, allowed := relay.destinationAllowlist[item.Message.Destination]; !allowed {
-					logger.FromContext(ctx).Error("outbox store returned a destination outside its claim allowlist")
+					relay.logger.Error(ctx, "outbox store returned a destination outside its claim allowlist")
 					fatalErr = fmt.Errorf("%w: destination outside claim allowlist", ErrStoreContract)
 					cancel()
 					break
@@ -345,7 +349,7 @@ func (relay *Relay) startWakeupLoop(ctx context.Context) <-chan struct{} {
 				return
 			}
 			if err != nil {
-				logger.FromContext(ctx).Debug("outbox wakeup unavailable; polling remains active")
+				relay.logger.Debug(ctx, "outbox wakeup unavailable; polling remains active")
 				timer := time.NewTimer(relay.options.PollInterval)
 				select {
 				case <-ctx.Done():
@@ -385,14 +389,14 @@ func (relay *Relay) process(ctx context.Context, claimed ClaimedMessage) {
 		return
 	}
 
-	messageCtx := correlation.WithContext(ctx, message.Metadata.CorrelationID)
+	messageCtx := logger.WithCorrelationID(ctx, message.Metadata.CorrelationID)
 	fields := []logger.Field{
 		logger.String("message_id", message.ID),
 		logger.String("destination", message.Destination),
 		logger.String("attempt", strconv.FormatUint(uint64(claimed.Lease.Attempt), 10)),
 	}
 	messageCtx = logger.WithFields(messageCtx, fields...)
-	logger.FromContext(messageCtx).Debug("outbox message claimed")
+	relay.logger.Debug(messageCtx, "outbox message claimed")
 
 	ack, publishErr := relay.publish(messageCtx, message)
 	if publishErr == nil {
@@ -401,7 +405,7 @@ func (relay *Relay) process(ctx context.Context, claimed ClaimedMessage) {
 			relay.logStoreFailure(messageCtx, "mark_published", err)
 			return
 		}
-		logger.FromContext(messageCtx).Debug("outbox message published")
+		relay.logger.Debug(messageCtx, "outbox message published")
 		return
 	}
 
@@ -411,21 +415,21 @@ func (relay *Relay) process(ctx context.Context, claimed ClaimedMessage) {
 			relay.logStoreFailure(messageCtx, "mark_retry", err)
 			return
 		}
-		logger.FromContext(logger.WithFields(messageCtx,
-			logger.String("failure_code", disposition.retry.Code),
-			logger.String("retry_delay", disposition.retry.Delay.String()),
-			logger.String("ambiguous", strconv.FormatBool(disposition.retry.Ambiguous)),
-		)).Warn("outbox message scheduled for retry")
+		relay.logger.Warn(messageCtx, "outbox message scheduled for retry",
+			zap.String("failure_code", disposition.retry.Code),
+			zap.Duration("retry_delay", disposition.retry.Delay),
+			zap.Bool("ambiguous", disposition.retry.Ambiguous),
+		)
 		return
 	}
 	if err := relay.markDead(messageCtx, claimed.Lease, disposition.dead); err != nil {
 		relay.logStoreFailure(messageCtx, "mark_dead", err)
 		return
 	}
-	logger.FromContext(logger.WithFields(messageCtx,
-		logger.String("failure_code", disposition.dead.Code),
-		logger.String("ambiguous", strconv.FormatBool(disposition.dead.Ambiguous)),
-	)).Error("outbox message marked dead")
+	relay.logger.Error(messageCtx, "outbox message marked dead",
+		zap.String("failure_code", disposition.dead.Code),
+		zap.Bool("ambiguous", disposition.dead.Ambiguous),
+	)
 }
 
 type failureDisposition struct {
@@ -486,9 +490,9 @@ func (relay *Relay) backoff(ctx context.Context, attempt uint32) (delay time.Dur
 		if !valid {
 			delay = relay.options.PollInterval
 			relay.invalidBackoffOnce.Do(func() {
-				logger.FromContext(logger.WithFields(ctx,
-					logger.String("failure_code", "invalid_backoff"),
-				)).Warn("outbox backoff returned an invalid delay")
+				relay.logger.Warn(ctx, "outbox backoff returned an invalid delay",
+					zap.String("failure_code", "invalid_backoff"),
+				)
 			})
 		}
 	}()
@@ -534,27 +538,24 @@ func (relay *Relay) logStoreFailure(ctx context.Context, operation string, failu
 	case errors.Is(failure, context.Canceled):
 		code = "store_canceled"
 	}
-	logger.FromContext(logger.WithFields(ctx,
-		logger.String("operation", operation),
-		logger.String("failure_code", code),
-		logger.String("error_type", fmt.Sprintf("%T", failure)),
-	)).Error("outbox store operation failed")
+	relay.logger.Error(ctx, "outbox store operation failed",
+		zap.String("operation", operation),
+		zap.String("failure_code", code),
+		zap.String("error_type", fmt.Sprintf("%T", failure)),
+	)
 }
 
 func (relay *Relay) logInvalidMessage(ctx context.Context, lease Lease) {
-	logger.FromContext(logger.WithFields(ctx,
-		logger.String("message_id", lease.MessageID),
-		logger.String("attempt", strconv.FormatUint(uint64(lease.Attempt), 10)),
-		logger.String("failure_code", failureInvalidMessage),
-	)).Error("outbox message marked dead")
+	relay.logger.Error(ctx, "outbox message marked dead",
+		zap.String("message_id", lease.MessageID),
+		zap.Uint32("attempt", lease.Attempt),
+		zap.String("failure_code", failureInvalidMessage),
+	)
 }
 
 func normalizedMessage(lease Lease, message Message, maximumDataBytes int) (Message, error) {
 	if err := validateClaimedMessage(lease, message, maximumDataBytes); err != nil {
 		return Message{}, ErrInvalidMessage
-	}
-	if message.Metadata.CorrelationID == "" {
-		message.Metadata.CorrelationID = fallbackCorrelationID(message.ID)
 	}
 	return message, nil
 }
@@ -604,11 +605,6 @@ func destinationSet(destinations []string) map[string]struct{} {
 		set[destination] = struct{}{}
 	}
 	return set
-}
-
-func fallbackCorrelationID(messageID string) string {
-	digest := sha256.Sum256([]byte(messageID))
-	return "relay-" + hex.EncodeToString(digest[:16])
 }
 
 func stopTimer(timer *time.Timer) {

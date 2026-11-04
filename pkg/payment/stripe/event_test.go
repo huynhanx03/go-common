@@ -1,6 +1,7 @@
 package stripe
 
 import (
+	"context"
 	"testing"
 
 	"github.com/huynhanx03/go-common/pkg/payment"
@@ -117,14 +118,14 @@ func TestVerifyAndDecodeRejectsMissingSignatureAndSecret(t *testing.T) {
 
 	provider, _ := newTestProvider(t, "{}")
 
-	if _, appErr := provider.VerifyAndDecode([]byte("{}"), ""); appErr == nil {
+	if _, appErr := provider.VerifyAndDecode(context.Background(), []byte("{}"), ""); appErr == nil {
 		t.Fatal("a missing signature header must be rejected")
 	} else if appErr.Code != payment.CodePaymentInvalid {
 		t.Fatalf("missing signature code = %d", appErr.Code)
 	}
 
-	noSecret := newWithClient(provider.client, nil, "")
-	if _, appErr := noSecret.VerifyAndDecode([]byte("{}"), "sig"); appErr == nil {
+	noSecret := newWithClient(provider.client, newTestLogger(), "")
+	if _, appErr := noSecret.VerifyAndDecode(context.Background(), []byte("{}"), "sig"); appErr == nil {
 		t.Fatal("a missing webhook secret must be rejected")
 	} else if appErr.Code != payment.CodePaymentProviderError {
 		t.Fatalf("missing secret code = %d", appErr.Code)

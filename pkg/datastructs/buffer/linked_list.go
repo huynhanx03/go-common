@@ -4,7 +4,7 @@ import (
 	"io"
 	"math"
 
-	"github.com/huynhanx03/go-common/pkg/pool/byteslice"
+	"github.com/huynhanx03/go-common/pkg/pool"
 )
 
 const minReadChunkSize = 512
@@ -46,7 +46,7 @@ func (ll *LinkedListBuffer) Read(p []byte) (int, error) {
 			n.data = n.data[copied:]
 			ll.pushFront(n)
 		} else {
-			byteslice.Put(n.data)
+			pool.Put(n.data)
 		}
 
 		if totalRead == len(p) {
@@ -62,12 +62,12 @@ func (ll *LinkedListBuffer) Read(p []byte) (int, error) {
 
 // AllocNode allocates a []byte from the pool.
 func (ll *LinkedListBuffer) AllocNode(size int) []byte {
-	return byteslice.Get(size)
+	return pool.Get(size)
 }
 
 // FreeNode returns a []byte to the pool.
 func (ll *LinkedListBuffer) FreeNode(p []byte) {
-	byteslice.Put(p)
+	pool.Put(p)
 }
 
 // Append adds p to the tail without copying (zero-copy).
@@ -96,7 +96,7 @@ func (ll *LinkedListBuffer) PushFront(p []byte) {
 		return
 	}
 
-	buf := byteslice.Get(dataLen)
+	buf := pool.Get(dataLen)
 	copy(buf, p)
 	ll.pushFront(&node{data: buf})
 }
@@ -108,7 +108,7 @@ func (ll *LinkedListBuffer) PushBack(p []byte) {
 		return
 	}
 
-	buf := byteslice.Get(dataLen)
+	buf := pool.Get(dataLen)
 	copy(buf, p)
 	ll.pushBack(&node{data: buf})
 }
@@ -214,7 +214,7 @@ func (ll *LinkedListBuffer) Discard(n int) (int, error) {
 		// Full discard of this node
 		remaining -= nodeLen
 		discarded += nodeLen
-		byteslice.Put(current.data)
+		pool.Put(current.data)
 	}
 
 	return discarded, nil
@@ -226,7 +226,7 @@ func (ll *LinkedListBuffer) ReadFrom(r io.Reader) (int64, error) {
 	var total int64
 
 	for {
-		buf := byteslice.Get(minReadChunkSize)
+		buf := pool.Get(minReadChunkSize)
 		bytesRead, err := r.Read(buf)
 		if bytesRead < 0 {
 			panic("linkedlist: reader returned negative count")
@@ -236,11 +236,11 @@ func (ll *LinkedListBuffer) ReadFrom(r io.Reader) (int64, error) {
 		buf = buf[:bytesRead]
 
 		if err == io.EOF {
-			byteslice.Put(buf)
+			pool.Put(buf)
 			return total, nil
 		}
 		if err != nil {
-			byteslice.Put(buf)
+			pool.Put(buf)
 			return total, err
 		}
 
@@ -268,7 +268,7 @@ func (ll *LinkedListBuffer) WriteTo(w io.Writer) (int64, error) {
 			return total, io.ErrShortWrite
 		}
 
-		byteslice.Put(current.data)
+		pool.Put(current.data)
 	}
 
 	return total, nil
@@ -292,7 +292,7 @@ func (ll *LinkedListBuffer) IsEmpty() bool {
 // Reset clears the buffer and returns all memory to the pool.
 func (ll *LinkedListBuffer) Reset() {
 	for current := ll.popFront(); current != nil; current = ll.popFront() {
-		byteslice.Put(current.data)
+		pool.Put(current.data)
 	}
 	ll.head = nil
 	ll.tail = nil

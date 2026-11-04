@@ -18,6 +18,9 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+
+	"github.com/huynhanx03/go-common/pkg/logger"
+	"go.uber.org/zap"
 )
 
 func TestLoadServerMTLSRejectsIncompleteAndInvalidFiles(t *testing.T) {
@@ -41,7 +44,7 @@ func TestMTLSServerAcceptsOnlyClientCertificatesFromDedicatedCA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, err := grpcserver.New(grpcserver.Config{Name: "mtls-test", Address: "127.0.0.1:0", TLS: serverTLS}, func(*grpc.Server) {})
+	server, err := grpcserver.New(grpcserver.Config{Name: "mtls-test", Address: "127.0.0.1:0", TLS: serverTLS, Logger: logger.Wrap(zap.NewNop())}, func(*grpc.Server) {})
 	if err != nil {
 		t.Fatal(err)
 	}

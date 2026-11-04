@@ -7,7 +7,6 @@ import (
 
 const (
 	DefaultPageSize = 10
-	MaxPageSize     = 100
 )
 
 var ErrInvalidPagination = errors.New("dto: invalid pagination")
@@ -56,6 +55,18 @@ type Paginated[T any] struct {
 	Pagination *PaginationMeta `json:"pagination"`
 }
 
+// MapPaginated converts each record and preserves the pagination metadata.
+// The page, its Records pointer, and mapRecord must be non-nil.
+func MapPaginated[T, U any](p *Paginated[T], mapRecord func(T) U) *Paginated[U] {
+	mapped := &Paginated[U]{Pagination: p.Pagination}
+	records := make([]U, len(*p.Records))
+	for i, record := range *p.Records {
+		records[i] = mapRecord(record)
+	}
+	mapped.Records = &records
+	return mapped
+}
+
 // SetDefaults sets default values for pagination
 func (p *PaginationOptions) SetDefaults() {
 	if p == nil {
@@ -67,16 +78,12 @@ func (p *PaginationOptions) SetDefaults() {
 	if p.PageSize <= 0 {
 		p.PageSize = DefaultPageSize
 	}
-	if p.PageSize > MaxPageSize {
-		p.PageSize = MaxPageSize
-	}
 }
 
-// Validate checks positive bounded values and offset arithmetic.
+// Validate checks positive values and offset arithmetic.
 func (p PaginationOptions) Validate() error {
 	if p.Page <= 0 ||
 		p.PageSize <= 0 ||
-		p.PageSize > MaxPageSize ||
 		p.Page-1 > math.MaxInt/p.PageSize {
 		return ErrInvalidPagination
 	}
@@ -97,6 +104,15 @@ func CalculatePaginationChecked(
 	pageSize int,
 	totalItems int64,
 ) (*PaginationMeta, error) {
+	return calculatePaginationChecked(currentPage, pageSize, totalItems, int64(math.MaxInt))
+}
+
+func calculatePaginationChecked(
+	currentPage,
+	pageSize int,
+	totalItems,
+	maxPageCount int64,
+) (*PaginationMeta, error) {
 	options := PaginationOptions{Page: currentPage, PageSize: pageSize}
 	if err := options.Validate(); err != nil || totalItems < 0 {
 		return nil, ErrInvalidPagination
@@ -108,7 +124,7 @@ func CalculatePaginationChecked(
 	if totalPages64 == 0 {
 		totalPages64 = 1
 	}
-	if totalPages64 > int64(math.MaxInt) {
+	if totalPages64 > maxPageCount {
 		return nil, ErrInvalidPagination
 	}
 	totalPages := int(totalPages64)

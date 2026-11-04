@@ -4,7 +4,7 @@ import (
 	"errors"
 	"io"
 
-	"github.com/huynhanx03/go-common/pkg/pool/byteslice"
+	"github.com/huynhanx03/go-common/pkg/pool"
 	"github.com/huynhanx03/go-common/pkg/utils"
 )
 
@@ -35,7 +35,7 @@ func NewRing(capacity int) *RingBuffer {
 	}
 	capacity = utils.CeilToPowerOfTwo(capacity)
 	return &RingBuffer{
-		buf:      byteslice.Get(capacity),
+		buf:      pool.Get(capacity),
 		capacity: capacity,
 		empty:    true,
 	}
@@ -411,10 +411,10 @@ func (rb *RingBuffer) wrapIndex(idx int) int {
 func (rb *RingBuffer) grow(minCap int) {
 	newCap := rb.calculateGrowth(minCap)
 
-	newBuf := byteslice.Get(newCap)
+	newBuf := pool.Get(newCap)
 	bufferedLen := rb.Buffered()
 	_, _ = rb.Read(newBuf)
-	byteslice.Put(rb.buf)
+	pool.Put(rb.buf)
 
 	rb.buf = newBuf
 	rb.readPos = 0

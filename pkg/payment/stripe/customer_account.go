@@ -5,7 +5,7 @@ import (
 
 	"github.com/huynhanx03/go-common/pkg/common/apperr"
 	"github.com/huynhanx03/go-common/pkg/payment"
-	stripesdk "github.com/stripe/stripe-go/v85"
+	stripesdk "github.com/stripe/stripe-go/v87"
 )
 
 // CreateCustomerAccount creates a V2 customer account, requesting the automatic
@@ -45,7 +45,7 @@ func (p *Provider) CreateCustomerAccount(ctx context.Context, in *payment.NewCus
 
 	account, err := p.client.V2CoreAccounts.Create(ctx, params)
 	if err != nil {
-		return nil, p.fail("stripe v2 account create failed", err)
+		return nil, p.fail(ctx, "stripe v2 account create failed", err)
 	}
 
 	if account == nil {
@@ -64,7 +64,7 @@ func (p *Provider) FetchCustomerAccount(ctx context.Context, accountRef string) 
 
 	account, err := p.client.V2CoreAccounts.Retrieve(ctx, accountRef, params)
 	if err != nil {
-		return nil, p.fail("stripe v2 account retrieve failed", err)
+		return nil, p.fail(ctx, "stripe v2 account retrieve failed", err)
 	}
 
 	if account == nil {
@@ -96,7 +96,7 @@ func (p *Provider) SetAccountDefaultPaymentMethod(ctx context.Context, in *payme
 
 	account, err := p.client.V2CoreAccounts.Update(ctx, in.CustomerAccountRef, params)
 	if err != nil {
-		return nil, p.fail("stripe v2 account default payment method update failed", err)
+		return nil, p.fail(ctx, "stripe v2 account default payment method update failed", err)
 	}
 
 	if account == nil {

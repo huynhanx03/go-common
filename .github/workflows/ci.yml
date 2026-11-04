@@ -2,15 +2,7 @@ name: ci
 
 on:
   pull_request:
-  push:
-    branches: [main]
-  workflow_dispatch:
-    inputs:
-      run_integration:
-        description: Run container-backed integration tests
-        required: false
-        default: false
-        type: boolean
+  workflow_call:
 
 permissions:
   contents: read
@@ -23,34 +15,11 @@ env:
   GOFLAGS: -mod=readonly
 
 jobs:
-  quality:
-    name: Format, vet, contracts
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
-        with:
-          go-version-file: go.mod
-          cache: true
-      - run: go mod download
-      - name: Verify module graph
-        run: |
-          go mod verify
-          go mod tidy -diff
-      - name: Validate workflows
-        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
-      - name: Verify formatting
-        run: make format-check
-      - name: Vet
-        run: go vet ./...
-      - name: Verify documentation and examples
-        run: ./scripts/verify-docs.sh
-
   unit:
     name: Unit tests and coverage
+    outputs:
+      coverage: ${{ steps.coverage.outputs.total }}
+      minimum_coverage: ${{ steps.coverage.outputs.minimum }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -63,33 +32,15 @@ jobs:
           cache: true
       - run: go mod download
       - name: Test with coverage threshold
+        id: coverage
         env:
           COVER_PROFILE: coverage.out
         run: ./scripts/verify-coverage.sh
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: go-common-coverage-${{ github.sha }}
-          path: coverage.out
-          if-no-files-found: error
-          retention-days: 30
 
   race:
-    name: Race / ${{ matrix.package }}
+    name: Race tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        package:
-          - ./pkg/common/lifecycle
-          - ./pkg/common/health
-          - ./pkg/common/websocket
-          - ./pkg/common/cache/...
-          - ./pkg/common/workerpool
-          - ./pkg/logger
-          - ./pkg/mq/batcher
-          - ./pkg/mq/forge
-          - ./pkg/mq/outbox/...
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -99,7 +50,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - run: go mod download
-      - run: go test -race "${{ matrix.package }}" -count=1
+      - run: make test-race
 
   fuzz-seeds:
     name: Fuzz seed corpus
@@ -116,50 +67,8 @@ jobs:
       - run: go mod download
       - run: make fuzz-seeds
 
-  vulnerability:
-    name: Reachable vulnerabilities
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
-        with:
-          go-version-file: go.mod
-          cache: true
-      - run: go mod download
-      - name: Run govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
-
-  benchmarks:
-    name: Benchmark baseline
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
-        with:
-          go-version-file: go.mod
-          cache: true
-      - run: go mod download
-      - name: Capture benchmark matrix
-        env:
-          BENCH_COUNT: 5
-        run: ./scripts/run-benchmarks.sh | tee benchmark.txt
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: go-common-benchmark-${{ github.sha }}
-          path: benchmark.txt
-          if-no-files-found: error
-          retention-days: 90
-
   integration:
     name: Container integration tests
-    if: github.event_name == 'workflow_dispatch' && inputs.run_integration
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -171,31 +80,204 @@ jobs:
           go-version-file: go.mod
           cache: true
       - run: go mod download
-      - run: ./scripts/test-integration.sh
+      - run: make test-integration
+
+  benchmark:
+    name: Benchmarks
+    outputs:
+      report: ${{ steps.benchmarks.outputs.report }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod download
+      - name: Run benchmarks
+        id: benchmarks
+        run: |
+          log_file="$RUNNER_TEMP/go-benchmarks.log"
+          set +e
+          make benchmarks > "$log_file" 2>&1
+          result=$?
+          set -e
+          cat "$log_file"
+
+          delimiter="BENCHMARKS_$(openssl rand -hex 16)"
+          {
+            echo "report<<$delimiter"
+            grep -E '^(Benchmark|ok[[:space:]]|FAIL)' "$log_file" || true
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+          exit "$result"
+
+  test-overview:
+    name: Test Overview
+    if: always()
+    needs: [unit, race, fuzz-seeds, integration, benchmark]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Write test report
+        env:
+          UNIT_RESULT: ${{ needs.unit.result }}
+          RACE_RESULT: ${{ needs.race.result }}
+          FUZZ_RESULT: ${{ needs.fuzz-seeds.result }}
+          INTEGRATION_RESULT: ${{ needs.integration.result }}
+          BENCHMARK_RESULT: ${{ needs.benchmark.result }}
+          UNIT_COVERAGE: ${{ needs.unit.outputs.coverage }}
+          MINIMUM_COVERAGE: ${{ needs.unit.outputs.minimum_coverage }}
+        run: |
+          coverage="${UNIT_COVERAGE:-not available}"
+          if [[ -n "${UNIT_COVERAGE:-}" ]]; then
+            coverage="${UNIT_COVERAGE}%"
+          fi
+          {
+            echo '## Test Overview'
+            echo
+            echo '| Test suite | Result | Coverage |'
+            echo '| --- | --- | --- |'
+            echo "| Unit tests | $UNIT_RESULT | $coverage (minimum: ${MINIMUM_COVERAGE:-65.0}%) |"
+            echo "| Race tests (all packages) | $RACE_RESULT | — |"
+            echo "| Fuzz seed corpus | $FUZZ_RESULT | — |"
+            echo "| Container integration tests | $INTEGRATION_RESULT | — |"
+            echo "| Benchmarks | $BENCHMARK_RESULT | — |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  quality:
+    name: Quality checks
+    if: always()
+    needs: [test-overview]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod download
+      - name: Verify module graph
+        run: |
+          go mod verify
+          go mod tidy -diff
+      - name: Validate workflows
+        run: make workflow-check
+      - name: Verify formatting
+        run: make format-check
+      - name: Vet
+        run: go vet ./...
+
+  security:
+    name: Security scans
+    if: always()
+    needs: [quality]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod download
+      - name: Scan Go dependencies for known vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+      - name: Scan repository for secrets
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: false
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: false
+          GITLEAKS_ENABLE_SUMMARY: true
 
   gate:
     name: Required gate
     if: always()
-    needs: [quality, unit, race, fuzz-seeds, vulnerability]
+    needs: [unit, race, fuzz-seeds, integration, benchmark, test-overview, quality, security]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Require every mandatory job to pass
+      - name: Require every CI check to pass
         env:
-          QUALITY_RESULT: ${{ needs.quality.result }}
           UNIT_RESULT: ${{ needs.unit.result }}
           RACE_RESULT: ${{ needs.race.result }}
           FUZZ_RESULT: ${{ needs.fuzz-seeds.result }}
-          VULNERABILITY_RESULT: ${{ needs.vulnerability.result }}
+          INTEGRATION_RESULT: ${{ needs.integration.result }}
+          BENCHMARK_RESULT: ${{ needs.benchmark.result }}
+          TEST_OVERVIEW_RESULT: ${{ needs.test-overview.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          SECURITY_RESULT: ${{ needs.security.result }}
         run: |
           for result in \
-            "$QUALITY_RESULT" \
             "$UNIT_RESULT" \
             "$RACE_RESULT" \
             "$FUZZ_RESULT" \
-            "$VULNERABILITY_RESULT"; do
+            "$INTEGRATION_RESULT" \
+            "$BENCHMARK_RESULT" \
+            "$TEST_OVERVIEW_RESULT" \
+            "$QUALITY_RESULT" \
+            "$SECURITY_RESULT"; do
             if [[ "$result" != success ]]; then
               echo "::error::A required go-common job did not pass (result=$result)."
               exit 1
             fi
           done
+
+  pr-check-summary:
+    name: Prepare PR check summary
+    if: ${{ always() && github.event_name == 'pull_request' }}
+    continue-on-error: true
+    needs: [unit, race, fuzz-seeds, integration, benchmark, test-overview, quality, security, gate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Build CI report
+        env:
+          UNIT_RESULT: ${{ needs.unit.result }}
+          RACE_RESULT: ${{ needs.race.result }}
+          FUZZ_RESULT: ${{ needs.fuzz-seeds.result }}
+          INTEGRATION_RESULT: ${{ needs.integration.result }}
+          BENCHMARK_RESULT: ${{ needs.benchmark.result }}
+          OVERVIEW_RESULT: ${{ needs.test-overview.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          SECURITY_RESULT: ${{ needs.security.result }}
+          GATE_RESULT: ${{ needs.gate.result }}
+          UNIT_COVERAGE: ${{ needs.unit.outputs.coverage }}
+          MINIMUM_COVERAGE: ${{ needs.unit.outputs.minimum_coverage }}
+          BENCHMARK_REPORT: ${{ needs.benchmark.outputs.report }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          jq -n \
+            --arg unit "$UNIT_RESULT" \
+            --arg race "$RACE_RESULT" \
+            --arg fuzz "$FUZZ_RESULT" \
+            --arg integration "$INTEGRATION_RESULT" \
+            --arg benchmark "$BENCHMARK_RESULT" \
+            --arg overview "$OVERVIEW_RESULT" \
+            --arg quality "$QUALITY_RESULT" \
+            --arg security "$SECURITY_RESULT" \
+            --arg gate "$GATE_RESULT" \
+            --arg coverage "$UNIT_COVERAGE" \
+            --arg minimum_coverage "$MINIMUM_COVERAGE" \
+            --arg benchmark_report "$BENCHMARK_REPORT" \
+            --arg run_url "$RUN_URL" \
+            '{checks: {unit: $unit, race: $race, fuzz_seeds: $fuzz, integration: $integration, benchmarks: $benchmark, test_overview: $overview, quality: $quality, security: $security, required_gate: $gate}, coverage: {total_percent: $coverage, minimum_percent: $minimum_coverage}, benchmark_output: $benchmark_report, workflow_run: $run_url}' \
+            > "$RUNNER_TEMP/pr-check-summary.json"
+
+      - name: Upload PR check summary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pr-check-summary
+          path: ${{ runner.temp }}/pr-check-summary.json
+          if-no-files-found: error
+          retention-days: 1

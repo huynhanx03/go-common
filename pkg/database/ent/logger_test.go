@@ -30,16 +30,16 @@ func (d *fakeDialectDriver) Tx(context.Context) (dialect.Tx, error)        { ret
 func (d *fakeDialectDriver) Close() error                                  { return nil }
 func (d *fakeDialectDriver) Dialect() string                               { return dialect.MySQL }
 
-func observedCtx(t *testing.T) (context.Context, *observer.ObservedLogs) {
+func observedLogger(t *testing.T) (*logger.Logger, context.Context, *observer.ObservedLogs) {
 	t.Helper()
 	core, logs := observer.New(zapcore.DebugLevel)
-	return logger.WithContext(context.Background(), zap.New(core)), logs
+	return logger.Wrap(zap.New(core)), context.Background(), logs
 }
 
 func TestWrapLoggingSlowQuery(t *testing.T) {
-	ctx, logs := observedCtx(t)
+	log, ctx, logs := observedLogger(t)
 	const threshold = time.Nanosecond
-	drv := WrapLogging(&fakeDialectDriver{}, threshold).(*logDriver)
+	drv := WrapLogging(log, &fakeDialectDriver{}, threshold).(*logDriver)
 	startedAt := time.Unix(0, 0)
 	clockCalls := 0
 	drv.now = func() time.Time {
@@ -59,8 +59,9 @@ func TestWrapLoggingSlowQuery(t *testing.T) {
 }
 
 func TestWrapLoggingErrorDoesNotExposeStatementArgumentsOrErrorText(t *testing.T) {
-	ctx, logs := observedCtx(t)
+	log, ctx, logs := observedLogger(t)
 	drv := WrapLogging(
+		log,
 		&fakeDialectDriver{err: errors.New("password=hunter2 token=top-secret")},
 		0,
 	)
@@ -90,8 +91,8 @@ func TestWrapLoggingErrorDoesNotExposeStatementArgumentsOrErrorText(t *testing.T
 }
 
 func TestWrapLoggingIgnoresCanceled(t *testing.T) {
-	ctx, logs := observedCtx(t)
-	drv := WrapLogging(&fakeDialectDriver{err: context.Canceled}, 0)
+	log, ctx, logs := observedLogger(t)
+	drv := WrapLogging(log, &fakeDialectDriver{err: context.Canceled}, 0)
 
 	_ = drv.Query(ctx, "SELECT 1", nil, nil)
 	if got := logs.Len(); got != 0 {
@@ -100,8 +101,8 @@ func TestWrapLoggingIgnoresCanceled(t *testing.T) {
 }
 
 func TestWrapLoggingDebugUsesStableSafeStatementIdentity(t *testing.T) {
-	ctx, logs := observedCtx(t)
-	drv := WrapLogging(&fakeDialectDriver{}, time.Hour)
+	log, ctx, logs := observedLogger(t)
+	drv := WrapLogging(log, &fakeDialectDriver{}, time.Hour)
 	const query = "SELECT * FROM credentials WHERE password = 'literal-secret'"
 
 	if err := drv.Query(ctx, query, []any{"argument-secret"}, nil); err != nil {
@@ -128,6 +129,7 @@ func TestWrapObservedLoggingReportsOnlyBoundedStatementMetadata(t *testing.T) {
 	secretErr := errors.New("password=hunter2")
 	observations := make([]StatementObservation, 0, 4)
 	drv := WrapObservedLogging(
+		logger.Wrap(zap.NewNop()),
 		&fakeDialectDriver{err: secretErr},
 		time.Hour,
 		func(_ context.Context, observation StatementObservation) {
@@ -161,6 +163,7 @@ func TestWrapObservedLoggingReportsOnlyBoundedStatementMetadata(t *testing.T) {
 
 func TestWrapObservedLoggingObserverCannotBreakDatabaseCall(t *testing.T) {
 	drv := WrapObservedLogging(
+		logger.Wrap(zap.NewNop()),
 		&fakeDialectDriver{},
 		time.Hour,
 		func(context.Context, StatementObservation) { panic("telemetry failed") },
@@ -173,7 +176,7 @@ func TestWrapObservedLoggingObserverCannotBreakDatabaseCall(t *testing.T) {
 
 func TestUnwrapLoggingReturnsOriginalDriver(t *testing.T) {
 	original := &fakeDialectDriver{}
-	wrapped := WrapLogging(WrapObservedLogging(original, 0, nil), 0)
+	wrapped := WrapLogging(logger.Wrap(zap.NewNop()), WrapObservedLogging(logger.Wrap(zap.NewNop()), original, 0, nil), 0)
 
 	if got := UnwrapLogging(wrapped); got != original {
 		t.Fatalf("UnwrapLogging() = %T %p, want %T %p", got, got, original, original)
@@ -245,7 +248,7 @@ func TestWrapLoggingForwardsContextStatementsOnDriverAndTransaction(t *testing.T
 	const statement = "SELECT pg_advisory_xact_lock($1)"
 	transaction := &contextDialectTx{}
 	original := &contextDialectDriver{tx: transaction}
-	wrapped := WrapLogging(original, 0)
+	wrapped := WrapLogging(logger.Wrap(zap.NewNop()), original, 0)
 
 	execer, ok := wrapped.(interface {
 		ExecContext(context.Context, string, ...any) (sql.Result, error)

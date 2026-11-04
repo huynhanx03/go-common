@@ -7,8 +7,6 @@ A Gin-based HTTP toolkit providing middlewares, request/response helpers, valida
 ```
 pkg/common/http/
 ├── middlewares/          # Gin middleware chain
-│   ├── auth.go           # JWT authentication (RSA)
-│   ├── permission.go     # RBAC permission & role level checks
 │   ├── rate_limit.go     # Per-key token bucket rate limiting
 │   ├── circuit_breaker.go# Circuit breaker (503 on open)
 │   ├── cors.go           # CORS headers
@@ -23,7 +21,7 @@ pkg/common/http/
 │   ├── retry.go          # Generic retry with backoff
 │   └── fanout.go         # Concurrent fan-out execution
 ├── response/
-│   ├── wrapper.go        # Standardized JSON responses (+ cid on errors)
+│   ├── wrapper.go        # Standardized JSON responses (+ request_id on errors)
 │   ├── reply.go          # Created / Updated / Deleted / Paginated overrides
 │   ├── codes.go          # Code ranges → HTTP status mapping
 │   ├── messages.go       # Default messages per code
@@ -35,30 +33,9 @@ pkg/common/http/
 
 ## Middlewares
 
-### Authentication
-
-JWT validation with RSA signing. Extracts `UserID` and `Username` into request context.
-
-```go
-r.Use(middlewares.Authentication(rsaPublicKey))
-
-// Access in handler:
-userID := ctx.Value(constraints.ContextKeyUserID).(int)
-```
-
-### Permission Checker
-
-RBAC with nested-set role hierarchy. Cached via Ember local cache.
-
-```go
-pc := middlewares.NewPermissionChecker(userRepo, roleRepo, permRepo, localCache)
-
-// Require specific permission scope on a resource
-r.POST("/users", pc.RequirePermission("users", permissions.ScopeWrite))
-
-// Require minimum role level (lower = more privileged)
-r.DELETE("/admin", pc.RequireRole(0)) // admin only
-```
+Authentication and authorization belong to application code. Call
+[`security.Checker`](../../security/README.md) with the extracted token and
+resolved permissions, then map its result to your HTTP response.
 
 ### Rate Limiting
 
@@ -123,7 +100,6 @@ Chain multiple middlewares into a single handler or compose them for route regis
 ```go
 // Wrap a final handler with middlewares
 r.GET("/admin", middlewares.Compose(
-    middlewares.Authentication(key),
     middlewares.RateLimit(cfg),
     middlewares.CircuitBreakerMiddleware(cb),
 )(adminHandler))
@@ -131,7 +107,6 @@ r.GET("/admin", middlewares.Compose(
 // Or pass as handler slice
 r.GET("/path", middlewares.ComposeHandlers(
     middlewares.RateLimit(cfg),
-    middlewares.Authentication(key),
     myHandler,
 )...)
 ```
@@ -192,8 +167,8 @@ return response.Deleted(nil), nil            // DELETE      → 200, 20003
 ```
 
 Every error is attached to the Gin context (`c.Error`), so the request logger
-records the full cause chain under the request's cid — the client only ever
-sees `code + message + cid`.
+records the full cause chain under the request ID — the client only ever
+sees `code + message + request_id`.
 
 ## Error Handling
 
@@ -275,15 +250,15 @@ With pagination (from `response.Paginated` + `dto.CalculatePagination`):
 }
 ```
 
-Errors carry the request's correlation ID, so a client-side error report can
-be matched to server logs directly (`grep` the cid):
+Errors carry the request ID, so a client-side error report can
+be matched to server logs directly (`grep` the request ID):
 
 ```json
 {
     "code": 44100,
     "message": "user not found",
     "data": null,
-    "cid": "0197f6f2-6a3e-7cc0-..."
+    "request_id": "0197f6f2-6a3e-7cc0-..."
 }
 ```
 
