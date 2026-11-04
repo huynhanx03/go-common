@@ -60,7 +60,7 @@ grep -Fq '"$BENCHMARK_RESULT"' "$ci" ||
   fail 'CI required gate must fail when benchmarks do not pass'
 grep -Fq 'needs: [unit, race, fuzz-seeds, integration, benchmark, test-overview, quality, security, gate]' "$ci" ||
   fail 'AI CI report must wait for every required CI job'
-grep -Fq 'name: go-common-ai-ci-report' "$ci" ||
+grep -Fq 'name: pr-check-summary' "$ci" ||
   fail 'CI must publish a compact AI review report'
 grep -Fq 'workflow_run:' "$workflow_root/ai-review.yml" ||
   fail 'AI CI review must run after the main CI workflow'
@@ -78,8 +78,8 @@ grep -Fq 'pull-requests: write' "$workflow_root/ai-review.yml" ||
   fail 'AI CI review must be able to comment on pull requests'
 ! grep -Fq 'actions/checkout@' "$workflow_root/ai-review.yml" ||
   fail 'AI CI review must not check out pull request code'
-grep -Fq 'gh run download' "$workflow_root/ai-review.yml" ||
-  fail 'AI CI review must read the report artifact from the completed CI run'
+grep -Fq 'gh run download "$RUN_ID" --name pr-check-summary' "$workflow_root/ai-review.yml" ||
+  fail 'AI PR review must download the PR check summary artifact'
 grep -Fq 'copilot -p ' "$workflow_root/ai-review.yml" ||
   fail 'AI CI review must use GitHub Copilot CLI'
 grep -Fq -- '--no-ask-user' "$workflow_root/ai-review.yml" ||
