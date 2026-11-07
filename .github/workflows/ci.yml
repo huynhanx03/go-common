@@ -38,6 +38,7 @@ jobs:
         env:
           COVER_PROFILE: coverage.out
           COVERAGE_REPORT_FILE: ${{ runner.temp }}/unit-report.json
+          COVERAGE_DETAIL_REPORT_FILE: ${{ runner.temp }}/coverage-report.json
         run: ./scripts/verify-coverage.sh
       - name: Export unit report
         id: report
@@ -63,6 +64,14 @@ jobs:
         env:
           COVERAGE_RESULT: ${{ steps.coverage.outcome }}
         run: test "$COVERAGE_RESULT" = success
+      - name: Upload detailed coverage report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-report
+          path: ${{ runner.temp }}/coverage-report.json
+          if-no-files-found: ignore
+          retention-days: 1
 
   race:
     name: Race tests
@@ -331,6 +340,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Download detailed coverage report
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: coverage-report
+          path: ${{ runner.temp }}/coverage-report
       - name: Build CI report
         env:
           UNIT_RESULT: ${{ needs.unit.result }}
@@ -346,8 +362,13 @@ jobs:
           UNIT_REPORT: ${{ needs.unit.outputs.report }}
           BENCHMARK_REPORT: ${{ needs.benchmark.outputs.report }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COVERAGE_REPORT_FILE: ${{ runner.temp }}/coverage-report/coverage-report.json
         run: |
-          jq -n \
+          if [[ ! -s "$COVERAGE_REPORT_FILE" ]] || ! jq -e 'type == "object" and has("packages")' "$COVERAGE_REPORT_FILE" > /dev/null 2>&1; then
+            printf '%s\n' '{"status":"unavailable","reason":"coverage report artifact is missing or invalid"}' > "$RUNNER_TEMP/coverage-report-fallback.json"
+            COVERAGE_REPORT_FILE="$RUNNER_TEMP/coverage-report-fallback.json"
+          fi
+          jq --slurpfile detailed_coverage "$COVERAGE_REPORT_FILE" -n \
             --arg unit "$UNIT_RESULT" \
             --arg race "$RACE_RESULT" \
             --arg fuzz "$FUZZ_RESULT" \
@@ -361,7 +382,7 @@ jobs:
             --argjson unit_report "${UNIT_REPORT:-null}" \
             --argjson benchmark_report "${BENCHMARK_REPORT:-null}" \
             --arg run_url "$RUN_URL" \
-            '{head_sha: $head_sha, checks: {unit: $unit, race: $race, fuzz_seeds: $fuzz, integration: $integration, benchmarks: $benchmark, test_overview: $overview, quality: $quality, security: $security, required_gate: $gate}, tests: $unit_report.tests, coverage: $unit_report.coverage, benchmark: $benchmark_report, workflow_run: $run_url}' \
+            '{head_sha: $head_sha, checks: {unit: $unit, race: $race, fuzz_seeds: $fuzz, integration: $integration, benchmarks: $benchmark, test_overview: $overview, quality: $quality, security: $security, required_gate: $gate}, tests: $unit_report.tests, coverage: ($unit_report.coverage + {status: ($detailed_coverage[0].status // "unavailable"), total_percent: ($detailed_coverage[0].total_percent // $unit_report.coverage.total_percent), minimum_percent: ($detailed_coverage[0].minimum_percent // $unit_report.coverage.minimum_percent), threshold_met: $unit_report.coverage.threshold_met, test_packages: $unit_report.coverage.packages, packages: (if $detailed_coverage[0].status == "available" then $detailed_coverage[0].packages else $unit_report.coverage.packages end), zero_covered_functions_total: (($detailed_coverage[0].zero_covered_functions // []) | length), zero_covered_functions: (($detailed_coverage[0].zero_covered_functions // [])[:100]), zero_covered_functions_omitted: ([((($detailed_coverage[0].zero_covered_functions // []) | length) - 100), 0] | max)}), benchmark: $benchmark_report, workflow_run: $run_url}' \
             > "$RUNNER_TEMP/pr-check-summary.json"
 
       - name: Upload PR check summary

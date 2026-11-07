@@ -51,6 +51,16 @@ grep -Fq 'needs: [unit, race, fuzz-seeds, integration, benchmark, test-overview,
 grep -Fq 'if: always()' "$ci" || fail 'CI overview and required gate must observe failed dependencies'
 grep -Fq 'run: make test-integration' "$ci" ||
   fail 'container integration tests must run through the Makefile target'
+grep -Fq 'python3 scripts/coverage_report.py' "$root/scripts/verify-coverage.sh" ||
+  fail 'coverage verification must generate the detailed package report'
+grep -Fq 'name: coverage-report' "$ci" ||
+  fail 'CI must publish detailed coverage data for the AI review'
+grep -Fq 'actions/download-artifact@' "$ci" ||
+  fail 'PR summary must retrieve the detailed coverage report artifact'
+grep -Fq 'zero_covered_functions_total:' "$ci" ||
+  fail 'PR summary must include package and function coverage details'
+grep -Fq 'zero_covered_functions_total' "$ci" ||
+  fail 'AI coverage summary must report zero-covered function totals and truncation'
 grep -Fq 'uses: gitleaks/gitleaks-action@' "$ci" ||
   fail 'CI must scan the repository for leaked secrets'
 grep -Fq 'govulncheck@' "$ci" || fail 'CI must scan Go dependencies for known vulnerabilities'

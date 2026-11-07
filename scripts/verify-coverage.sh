@@ -5,6 +5,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 profile="${COVER_PROFILE:-}"
 test_events="${COVERAGE_TEST_EVENTS_FILE:-}"
 report_file="${COVERAGE_REPORT_FILE:-}"
+detail_report_file="${COVERAGE_DETAIL_REPORT_FILE:-}"
 owns_profile=false
 owns_test_events=false
 
@@ -76,6 +77,18 @@ if [[ -s "$profile" ]] && cover_output="$(go tool cover -func="$profile" 2>/dev/
       | sort_by(.coverage_percent)
       | .[:20]
     ')"
+  fi
+fi
+
+if [[ -n "$detail_report_file" ]]; then
+  mkdir -p "$(dirname "$detail_report_file")"
+  if [[ -s "$profile" ]] && ! python3 scripts/coverage_report.py \
+    --profile "$profile" \
+    --minimum "$minimum" \
+    --output "$detail_report_file"; then
+    printf '%s\n' '{"status":"unavailable","reason":"could not parse the coverage profile"}' > "$detail_report_file"
+  elif [[ ! -s "$profile" ]]; then
+    printf '%s\n' '{"status":"unavailable","reason":"coverage profile was not produced"}' > "$detail_report_file"
   fi
 fi
 
