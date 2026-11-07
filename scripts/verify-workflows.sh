@@ -79,6 +79,8 @@ grep -Fq 'gh run download "$run_id" --repo "$REPOSITORY" --name benchmark-baseli
   fail 'PR benchmark job must download the current-format main baseline artifact'
 grep -Fq 'legacy_artifact="go-common-benchmark-$head_sha"' "$ci" ||
   fail 'PR benchmark job must fall back to retained legacy main benchmark artifacts'
+grep -Fq '$0 == "benchmarks:" { in_benchmarks = 1; next }' "$ci" ||
+  fail 'legacy benchmark sample count must be read from the benchmarks target only'
 grep -Fq 'artifact_format: "legacy"' "$ci" ||
   fail 'PR benchmark job must mark metadata reconstructed from legacy artifacts'
 grep -Fq 'scripts/benchmark_report.py' "$ci" ||

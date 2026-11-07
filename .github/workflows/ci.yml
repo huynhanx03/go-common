@@ -175,7 +175,17 @@ jobs:
               makefile_content=""
             fi
             baseline_go_version="$(sed -nE 's/^go[[:space:]]+([^[:space:]]+).*/go\1/p' <<< "$go_mod_content" | head -n 1)"
-            baseline_benchmark_count="$(sed -nE 's/.*-count=([0-9]+).*/\1/p' <<< "$makefile_content" | head -n 1)"
+            baseline_benchmark_count="$(awk '
+              $0 == "benchmarks:" { in_benchmarks = 1; next }
+              in_benchmarks && /^[^[:space:]]/ { exit }
+              in_benchmarks && /-count=[0-9]+/ {
+                line = $0
+                sub(/^.*-count=/, "", line)
+                sub(/[^0-9].*$/, "", line)
+                print line
+                exit
+              }
+            ' <<< "$makefile_content")"
             if [[ -z "$baseline_go_version" || -z "$baseline_benchmark_count" ]]; then
               rm -rf "$baseline_dir"
               mkdir -p "$baseline_dir"
