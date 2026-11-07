@@ -111,14 +111,28 @@ grep -Fq 'copilot-requests: write' "$workflow_root/ai-review.yml" ||
   fail 'AI CI review must request Copilot inference permission'
 grep -Fq 'pull-requests: write' "$workflow_root/ai-review.yml" ||
   fail 'AI CI review must be able to comment on pull requests'
-! grep -Fq 'actions/checkout@' "$workflow_root/ai-review.yml" ||
-  fail 'AI CI review must not check out pull request code'
+grep -Fq '      contents: read' "$workflow_root/ai-review.yml" ||
+  fail 'AI CI review must be able to check out the default-branch report helper'
+grep -Fq 'ref: ${{ github.event.repository.default_branch }}' "$workflow_root/ai-review.yml" ||
+  fail 'AI CI review may check out only the repository default branch'
 grep -Fq 'gh run download "$RUN_ID" --repo "$REPOSITORY" --name pr-check-summary' "$workflow_root/ai-review.yml" ||
-  fail 'AI PR review must download the PR summary without requiring a local Git checkout'
+  fail 'AI PR review must download the PR summary artifact'
 grep -Fq 'gh run view "$RUN_ID" --repo "$REPOSITORY" --json' "$workflow_root/ai-review.yml" ||
-  fail 'AI PR review must fetch run details without requiring a local Git checkout'
-grep -Fq 'gh run view "$RUN_ID" --repo "$REPOSITORY" --log-failed' "$workflow_root/ai-review.yml" ||
-  fail 'AI PR review must fetch failed logs without requiring a local Git checkout'
+  fail 'AI PR review must fetch run details from GitHub'
+grep -Fq 'gh run view "$RUN_ID" --repo "$REPOSITORY" --job "$job_id" --log-failed' "$workflow_root/ai-review.yml" ||
+  fail 'AI PR review must fetch failed logs separately for each job'
+grep -Fq 'status: "available", jobs:' "$workflow_root/ai-review.yml" ||
+  fail 'AI PR review must normalize failed-job metadata before fetching logs'
+grep -Fq 'python3 scripts/ci_failure_report.py' "$workflow_root/ai-review.yml" ||
+  fail 'AI PR review must compact logs around failure markers'
+grep -Fq 'failure_diagnostics' "$workflow_root/ai-review.yml" ||
+  fail 'AI PR review must include per-job diagnostics in the prompt'
+grep -Fq 'zero_covered_functions_total' "$workflow_root/ai-review.yml" ||
+  fail 'AI prompt must report coverage gaps and omitted function counts'
+grep -Fq 'p < 0.05' "$workflow_root/ai-review.yml" ||
+  fail 'AI prompt must interpret benchmark significance conservatively'
+! grep -Eq -- '--log-failed[^|]*\|[[:space:]]*tail' "$workflow_root/ai-review.yml" ||
+  fail 'AI PR review must not use a global tail-only log excerpt'
 grep -Fq 'copilot -p ' "$workflow_root/ai-review.yml" ||
   fail 'AI CI review must use GitHub Copilot CLI'
 grep -Fq -- '--no-ask-user' "$workflow_root/ai-review.yml" ||

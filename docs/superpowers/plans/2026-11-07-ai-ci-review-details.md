@@ -75,17 +75,19 @@
 
 **Files:**
 - Modify: `.github/workflows/ai-review.yml`
+- Create: `scripts/ci_failure_report.py`
+- Create: `scripts/test_ci_failure_report.py`
 - Modify: `scripts/verify-workflows.sh`
 
 **Interfaces:**
 - AI workflow reads failed job IDs/names from the completed CI run and fetches failed-step logs per job.
 - The prompt receives bounded excerpts labeled by job and must separate evidence from inference.
 
-- [ ] Replace the single combined `--log-failed | tail -c 16000` excerpt with per-failed-job log retrieval and bounded context around failure markers.
-- [ ] Preserve a clear fallback when logs are unavailable or contain no recognized failure markers; include job conclusion but do not invent a cause.
-- [ ] Update the prompt to prioritize weakest packages, zero-covered functions, statistically supported benchmark deltas, and evidence-backed failure causes while noting artifact/environment limitations.
-- [ ] Extend workflow checks to guard against a global tail-only log excerpt and require per-job diagnostics without granting Copilot CLI tool access.
-- [ ] Run workflow validation and inspect a representative generated prompt/report containing a passing run, multiple failures, missing baseline, and an unavailable-log case.
+- [x] Replace the single combined `--log-failed | tail -c 16000` excerpt with per-failed-job log retrieval and bounded context around failure markers.
+- [x] Preserve a clear fallback when logs are unavailable or contain no recognized failure markers; include job conclusion but do not invent a cause.
+- [x] Update the prompt to prioritize weakest packages, zero-covered functions, statistically supported benchmark deltas, and evidence-backed failure causes while noting artifact/environment limitations.
+- [x] Extend workflow checks to guard against a global tail-only log excerpt and require per-job diagnostics without granting Copilot CLI tool access.
+- [x] Run workflow validation and inspect representative passing and multi-failure reports, including a missing summary artifact and unavailable job logs.
 
 ### Task 4: Verify the complete reporting path
 
@@ -95,7 +97,7 @@
 - Verify: `.github/workflows/ai-review.yml`
 - Verify: `scripts/verify-workflows.sh`
 
-- [ ] Run Python report tests, `make workflow-check`, and the repository's relevant CI script checks.
-- [ ] Generate the coverage summary from the current full coverage profile and ensure the compact report is below the AI workflow's artifact size limit.
-- [ ] Exercise benchmark report generation with a valid baseline artifact fixture and with no baseline.
-- [ ] Review the final diff to confirm unrelated dirty changes remain untouched and the generated PR comment stays concise but substantive.
+- [x] Run all Python report tests and `scripts/verify-workflows.sh`; attempt `make workflow-check` (actionlint could not download because proxy DNS is blocked), then parse all workflow YAML and syntax-check every `run` block with `bash -n`.
+- [x] Generate the detailed coverage JSON from a real full coverage profile (75,048 bytes; 70 packages and 308 zero-covered functions), below the AI artifact size limit.
+- [x] Exercise benchmark report generation with compatible, unavailable, invalid, and mismatched baseline fixtures; preserve significant and inconclusive benchstat output.
+- [x] Review the feature diff and generated prompt/report simulations; original workspace changes remain untouched in the isolated worktree.
