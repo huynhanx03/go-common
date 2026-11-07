@@ -21,7 +21,7 @@ class BenchmarkReportTest(unittest.TestCase):
             "go_version": "go1.27.3",
             "os": "linux",
             "arch": "amd64",
-            "benchmark_count": 10,
+            "benchmark_count": 20,
             "command": "make benchmarks",
         }
         self.baseline_metadata = {
@@ -51,7 +51,7 @@ class BenchmarkReportTest(unittest.TestCase):
 
     def test_compares_legacy_baseline_with_fewer_samples_and_reports_the_difference(self):
         fake_benchstat = self.root / "benchstat.py"
-        fake_benchstat.write_text("print('BenchmarkEncode-8 -20.00% (p=0.01 n=10)')\n", encoding="utf-8")
+        fake_benchstat.write_text("print('BenchmarkEncode-8 -20.00% (p=0.01 n=20)')\n", encoding="utf-8")
         baseline_metadata = {**self.baseline_metadata, "benchmark_count": 5}
 
         report = build_report(
@@ -65,16 +65,16 @@ class BenchmarkReportTest(unittest.TestCase):
         self.assertEqual(report["status"], "available")
         self.assertFalse(report["sample_counts_match"])
         self.assertIn("interpret p-values cautiously", report["sample_count_notice"])
-        self.assertEqual(report["candidate"]["benchmark_count"], 10)
+        self.assertEqual(report["candidate"]["benchmark_count"], 20)
         self.assertEqual(report["baseline"]["benchmark_count"], 5)
 
-    def test_candidate_must_keep_ten_samples(self):
-        metadata = {**self.candidate_metadata, "benchmark_count": 5}
+    def test_candidate_must_keep_twenty_samples(self):
+        metadata = {**self.candidate_metadata, "benchmark_count": 10}
 
         report = build_report(self.candidate, metadata, self.baseline, self.baseline_metadata, ["missing-benchstat"])
 
         self.assertEqual(report["status"], "unavailable")
-        self.assertIn("ten samples", report["reason"])
+        self.assertIn("twenty samples", report["reason"])
 
     def test_preserves_significant_and_inconclusive_benchstat_results(self):
         fake_benchstat = self.root / "benchstat.py"
@@ -82,8 +82,8 @@ class BenchmarkReportTest(unittest.TestCase):
             "import pathlib, sys\n"
             "assert pathlib.Path(sys.argv[-2].split('=', 1)[1]).is_file()\n"
             "assert pathlib.Path(sys.argv[-1].split('=', 1)[1]).is_file()\n"
-            "print('BenchmarkFast-8 -20.00% (p=0.001 n=10)')\n"
-            "print('BenchmarkStable-8 ~ (p=0.400 n=10)')\n",
+            "print('BenchmarkFast-8 -20.00% (p=0.001 n=20)')\n"
+            "print('BenchmarkStable-8 ~ (p=0.400 n=20)')\n",
             encoding="utf-8",
         )
 
@@ -97,7 +97,7 @@ class BenchmarkReportTest(unittest.TestCase):
 
         self.assertEqual(report["status"], "available")
         self.assertIn("p=0.001", report["comparison"])
-        self.assertIn("~ (p=0.400 n=10)", report["comparison"])
+        self.assertIn("~ (p=0.400 n=20)", report["comparison"])
         self.assertEqual(report["baseline"]["commit"], "main-commit")
 
     def test_missing_benchstat_is_reported_as_unavailable(self):

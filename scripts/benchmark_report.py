@@ -40,8 +40,8 @@ def unavailable(reason, candidate_metadata=None, baseline_metadata=None):
 def build_report(candidate_path, candidate_metadata, baseline_path, baseline_metadata, benchstat_command):
     if not valid_metadata(candidate_metadata):
         return unavailable("candidate benchmark metadata is missing or invalid", candidate_metadata, baseline_metadata)
-    if candidate_metadata["benchmark_count"] != 10:
-        return unavailable("candidate benchmark run must contain ten samples", candidate_metadata, baseline_metadata)
+    if candidate_metadata["benchmark_count"] != 20:
+        return unavailable("candidate benchmark run must contain twenty samples", candidate_metadata, baseline_metadata)
     if baseline_path is None or not Path(baseline_path).is_file():
         return unavailable("no retained successful main benchmark baseline artifact is available", candidate_metadata)
     if not valid_metadata(baseline_metadata):

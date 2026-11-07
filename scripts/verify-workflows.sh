@@ -51,6 +51,12 @@ grep -Fq 'needs: [unit, race, fuzz-seeds, integration, benchmark, test-overview,
 grep -Fq 'if: always()' "$ci" || fail 'CI overview and required gate must observe failed dependencies'
 grep -Fq 'run: make test-integration' "$ci" ||
   fail 'container integration tests must run through the Makefile target'
+grep -Fq $'test-unit:\n\tgo test -count=1 ./...' "$root/Makefile" ||
+  fail 'unit tests must run once without reusing cached results'
+grep -Fq $'test-race:\n\tgo test -race -count=1 ./...' "$root/Makefile" ||
+  fail 'race tests must run once without reusing cached results'
+grep -Fq $'test-integration:\n\tgo test -tags=integration -count=1 ./...' "$root/Makefile" ||
+  fail 'integration tests must run once without reusing cached results'
 grep -Fq 'python3 scripts/coverage_report.py' "$root/scripts/verify-coverage.sh" ||
   fail 'coverage verification must generate the detailed package report'
 grep -Fq 'name: coverage-report' "$ci" ||
@@ -89,14 +95,24 @@ grep -Fq 'golang.org/x/perf/cmd/benchstat@v0.0.0-20260709024250-82a0b07e230d' "$
   fail 'PR benchmark comparisons must use the pinned benchstat version'
 grep -Fq 'name: benchmark-comparison' "$ci" ||
   fail 'CI must publish the benchmark comparison report for the AI summary'
-grep -Fq 'benchmark_count 10' "$ci" ||
-  fail 'PR benchmark metadata must record ten samples per benchmark'
-grep -Fq 'benchmark_count 10' "$workflow_root/main.yml" ||
-  fail 'main benchmark metadata must record ten samples per benchmark'
+grep -Fq 'benchmark_count 20' "$ci" ||
+  fail 'PR benchmark metadata must record twenty samples per benchmark'
+grep -Fq 'benchmark_count 20' "$workflow_root/main.yml" ||
+  fail 'main benchmark metadata must record twenty samples per benchmark'
 grep -Fq 'retention-days: 90' "$workflow_root/main.yml" ||
-  fail 'main workflow must retain benchmark baselines for a bounded period'
-grep -Fq -- '-benchmem -benchtime=500ms -count=10 ./...' "$root/Makefile" ||
-  fail 'benchmark target must run ten samples with allocation metrics across all packages'
+  fail 'main workflow must retain benchmark and coverage baselines for a bounded period'
+grep -Fq -- '-benchmem -benchtime=500ms -count=20 ./...' "$root/Makefile" ||
+  fail 'benchmark target must run twenty samples with allocation metrics across all packages'
+grep -Fq 'timeout-minutes: 60' "$workflow_root/main.yml" ||
+  fail 'main benchmark job must allow adequate time for twenty samples'
+grep -Fq 'timeout-minutes: 60' "$ci" ||
+  fail 'PR benchmark job must allow adequate time for twenty samples'
+grep -Fq 'name: coverage-baseline' "$workflow_root/main.yml" ||
+  fail 'main workflow must publish a coverage baseline for package comparisons'
+grep -Fq 'coverage-report.json' "$workflow_root/main.yml" ||
+  fail 'main coverage baseline must include the package coverage report'
+grep -Fq 'coverage_metadata: ${{ steps.coverage_metadata.outputs.metadata }}' "$ci" ||
+  fail 'PR summary must preserve candidate coverage environment metadata'
 grep -Fq 'BENCHMARK_RESULT: ${{ needs.benchmark.result }}' "$ci" ||
   fail 'CI report and required gate must observe the benchmark result'
 grep -Fq '"$BENCHMARK_RESULT"' "$ci" ||
@@ -139,16 +155,30 @@ grep -Fq 'zero_covered_functions_total' "$workflow_root/ai-review.yml" ||
   fail 'AI prompt must report coverage gaps and omitted function counts'
 grep -Fq 'p < 0.05' "$workflow_root/ai-review.yml" ||
   fail 'AI prompt must interpret benchmark significance conservatively'
-grep -Fq 'Write the comment in English' "$workflow_root/ai-review.yml" ||
+grep -Fq 'comment in English only' "$workflow_root/ai-review.yml" ||
   fail 'AI CI review comments must be written in English'
+grep -Fq 'Do not write Vietnamese text' "$workflow_root/ai-review.yml" ||
+  fail 'AI CI review comments must not include Vietnamese text'
 grep -Fq 'python3 scripts/pr_summary_artifact.py' "$workflow_root/ai-review.yml" ||
   fail 'AI CI review must use the tested PR summary artifact downloader'
 grep -Fq 'RETRY_ATTEMPTS = 6' "$root/scripts/pr_summary_artifact.py" ||
   fail 'PR summary artifact download must retry transient artifact visibility'
-grep -Fq 'If sample counts differ, call that out' "$workflow_root/ai-review.yml" ||
+grep -Fq 'If sample counts differ, call that out and interpret p-values cautiously' "$workflow_root/ai-review.yml" ||
   fail 'AI prompt must disclose unequal benchmark sample counts'
 grep -Fq 'If baseline.artifact_format is legacy, say so' "$workflow_root/ai-review.yml" ||
   fail 'AI prompt must disclose legacy benchmark baselines'
+grep -Fq 'gh pr view "$PR_NUMBER" --repo "$REPOSITORY"' "$workflow_root/ai-review.yml" ||
+  fail 'AI prompt must receive bounded pull request title, description, and changed paths'
+grep -Fq 'python3 scripts/coverage_compare.py' "$workflow_root/ai-review.yml" ||
+  fail 'AI review must compare candidate package coverage with a main baseline'
+grep -Fq "'. + {coverage_delta: \$coverage_delta[0]}'" "$workflow_root/ai-review.yml" ||
+  fail 'AI review summary must include package-level coverage changes'
+grep -Fq '### Failures and recommended code changes' "$workflow_root/ai-review.yml" ||
+  fail 'AI prompt must provide actionable, evidence-linked code follow-ups'
+grep -Fq '### Test and coverage findings' "$workflow_root/ai-review.yml" ||
+  fail 'AI prompt must use the required test and coverage section'
+! grep -Fq 'Write the comment in Vietnamese' "$workflow_root/ai-review.yml" ||
+  fail 'AI review comment must not request Vietnamese output'
 ! grep -Eq -- '--log-failed[^|]*\|[[:space:]]*tail' "$workflow_root/ai-review.yml" ||
   fail 'AI PR review must not use a global tail-only log excerpt'
 grep -Fq 'copilot -p ' "$workflow_root/ai-review.yml" ||

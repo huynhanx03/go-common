@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Benchmark baseline is the newest retained artifact found across recent successful runs of `.github/workflows/main.yml`, including legacy `go-common-benchmark-<sha>` artifacts.
-- PR benchmark runs use 10 samples per benchmark. Baseline metadata preserves the actual sample count, which can be lower for legacy artifacts.
+- Main and PR benchmark runs use 20 samples per benchmark with a 60-minute job timeout. Baseline metadata preserves the actual sample count, which can be lower for legacy artifacts.
 - Missing or incompatible baseline data is reported as unavailable; it does not fail CI or permit a regression claim.
 - Report data and logs are untrusted input to Copilot; never execute downloaded artifact content.
 - The AI workflow keeps the existing same-repository PR guard, least-privilege permissions, and one updatable PR comment.
@@ -59,14 +59,14 @@
 - Modify: `scripts/verify-workflows.sh`
 
 **Interfaces:**
-- `make benchmarks` runs the existing benchmark suite with `-count=10`.
+- `make benchmarks` runs the existing benchmark suite with `-count=20`.
 - Successful `main` benchmark runs upload `benchmark-baseline/benchmark.txt` and `benchmark-baseline/metadata.json` with commit, timestamp, Go version, OS/architecture, and command.
 - PR benchmark job publishes a compact report containing baseline availability/provenance and `benchstat` comparison output.
 
-- [x] Update the benchmark target to 10 samples and verify the command still uses `-tags=benchmark`, `-benchmem`, and all packages.
+- [x] Update the benchmark target to 20 samples and verify the command still uses `-tags=benchmark`, `-benchmem`, and all packages.
 - [x] Capture benchmark stdout on `main`, create provenance metadata only after a successful run, and upload the baseline artifact with bounded retention.
 - [x] On PRs, search recent successful `main.yml` runs for the newest retained current-format or legacy benchmark artifact with read-only Actions permission; reconstruct metadata for legacy artifacts and keep reusable non-PR CI as a single-current-revision benchmark.
-- [x] Run the candidate benchmark at 10 samples in CI; compare with the artifact using a pinned `benchstat` tool version when a compatible baseline exists.
+- [x] Run the candidate benchmark at 20 samples in CI; compare with the artifact using a pinned `benchstat` tool version when a compatible baseline exists.
 - [x] Handle missing, expired, or incompatible baseline metadata as an explicit unavailable/incomparable report without failing required CI.
 - [x] Extend workflow validation for benchmark sample count, artifact publication, cross-run read permission, and graceful baseline fallback; run Python report tests in the quality job.
 - [x] Test compatible, legacy five-sample, missing, invalid, and environment-mismatched baselines; verify significant and inconclusive `benchstat` output is preserved. Local execution of the external tool was blocked by network restrictions; CI installs the pinned tool and runs the real comparison.
@@ -102,3 +102,12 @@
 - [x] Generate the detailed coverage JSON from a real full coverage profile (75,048 bytes; 70 packages and 308 zero-covered functions), below the AI artifact size limit.
 - [x] Exercise benchmark report generation with compatible, unavailable, invalid, and mismatched baseline fixtures; preserve significant and inconclusive benchstat output.
 - [x] Review the feature diff and generated prompt/report simulations; original workspace changes remain untouched in the isolated worktree.
+
+### Follow-up: add package coverage deltas and coding context
+
+- [x] Compare every package's current coverage with a retained main artifact; report percentage-point changes, new/removed packages, and environment mismatches.
+- [x] Generate a 90-day coverage baseline in the main workflow and add candidate coverage environment metadata to the PR summary.
+- [x] Run package-level coverage comparison in the default-branch AI workflow so the read-capable token never enters a PR-controlled job.
+- [x] Add bounded PR title/body/changed-path context and require a structured English review with evidence-linked code/test follow-ups.
+- [x] Make unit, race, and integration targets run once with `-count=1`; raise benchmarks to 20 samples and give both benchmark workflows a 60-minute timeout.
+- [x] Run all report-helper tests, workflow policy checks, YAML and embedded-shell validation, then inspect the complete diff before pushing.

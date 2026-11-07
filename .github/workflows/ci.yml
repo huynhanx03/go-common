@@ -21,6 +21,7 @@ jobs:
       coverage: ${{ steps.report.outputs.total }}
       minimum_coverage: ${{ steps.report.outputs.minimum }}
       report: ${{ steps.report.outputs.report }}
+      coverage_metadata: ${{ steps.coverage_metadata.outputs.metadata }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -59,6 +60,30 @@ jobs:
             echo "total=$total"
             echo "minimum=$minimum"
           } >> "$GITHUB_OUTPUT"
+      - name: Write candidate coverage metadata
+        id: coverage_metadata
+        if: always()
+        env:
+          COVERAGE_REPORT: ${{ runner.temp }}/coverage-report.json
+          COVERAGE_ARTIFACT_DIR: ${{ runner.temp }}/coverage-candidate
+          CANDIDATE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          mkdir -p "$COVERAGE_ARTIFACT_DIR"
+          if [[ -s "$COVERAGE_REPORT" ]] && jq -e 'type == "object" and has("packages")' "$COVERAGE_REPORT" > /dev/null 2>&1; then
+            cp "$COVERAGE_REPORT" "$COVERAGE_ARTIFACT_DIR/coverage-report.json"
+          fi
+          jq -n \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg commit "$CANDIDATE_COMMIT" \
+            --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg go_version "$(go env GOVERSION)" \
+            --arg os "$(go env GOOS)" \
+            --arg arch "$(go env GOARCH)" \
+            --arg command "go test -short -count=1 -covermode=atomic -coverprofile=coverage.out ./..." \
+            '{format_version: 1, run_id: $run_id, commit: $commit, created_at: $created_at, go_version: $go_version, os: $os, arch: $arch, command: $command}' \
+            > "$COVERAGE_ARTIFACT_DIR/metadata.json"
+          metadata="$(jq -c . "$COVERAGE_ARTIFACT_DIR/metadata.json")"
+          echo "metadata=$metadata" >> "$GITHUB_OUTPUT"
       - name: Require unit tests and coverage to pass
         if: always()
         env:
@@ -69,7 +94,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: coverage-report
-          path: ${{ runner.temp }}/coverage-report.json
+          path: ${{ runner.temp }}/coverage-candidate/
           if-no-files-found: ignore
           retention-days: 1
 
@@ -121,7 +146,7 @@ jobs:
   benchmark:
     name: Benchmarks
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     permissions:
       actions: read
       contents: read
@@ -234,7 +259,7 @@ jobs:
             --arg os "$(go env GOOS)" \
             --arg arch "$(go env GOARCH)" \
             --arg command "make benchmarks" \
-            --argjson benchmark_count 10 \
+            --argjson benchmark_count 20 \
             '{format_version: 1, run_id: $run_id, commit: $commit, created_at: $created_at, go_version: $go_version, os: $os, arch: $arch, command: $command, benchmark_count: $benchmark_count}' \
             > "$METADATA_FILE"
       - name: Build benchmark comparison report
@@ -430,6 +455,7 @@ jobs:
           GATE_RESULT: ${{ needs.gate.result }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           UNIT_REPORT: ${{ needs.unit.outputs.report }}
+          COVERAGE_METADATA: ${{ needs.unit.outputs.coverage_metadata }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           COVERAGE_REPORT_FILE: ${{ runner.temp }}/coverage-report/coverage-report.json
           BENCHMARK_REPORT_FILE: ${{ runner.temp }}/benchmark-comparison/benchmark-report.json
@@ -454,8 +480,9 @@ jobs:
             --arg gate "$GATE_RESULT" \
             --arg head_sha "$HEAD_SHA" \
             --argjson unit_report "${UNIT_REPORT:-null}" \
+            --argjson coverage_metadata "${COVERAGE_METADATA:-null}" \
             --arg run_url "$RUN_URL" \
-            '{head_sha: $head_sha, checks: {unit: $unit, race: $race, fuzz_seeds: $fuzz, integration: $integration, benchmarks: $benchmark, test_overview: $overview, quality: $quality, security: $security, required_gate: $gate}, tests: $unit_report.tests, coverage: ($unit_report.coverage + {status: ($detailed_coverage[0].status // "unavailable"), total_percent: ($detailed_coverage[0].total_percent // $unit_report.coverage.total_percent), minimum_percent: ($detailed_coverage[0].minimum_percent // $unit_report.coverage.minimum_percent), threshold_met: $unit_report.coverage.threshold_met, test_packages: $unit_report.coverage.packages, packages: (if $detailed_coverage[0].status == "available" then $detailed_coverage[0].packages else $unit_report.coverage.packages end), zero_covered_functions_total: (($detailed_coverage[0].zero_covered_functions // []) | length), zero_covered_functions: (($detailed_coverage[0].zero_covered_functions // [])[:100]), zero_covered_functions_omitted: ([((($detailed_coverage[0].zero_covered_functions // []) | length) - 100), 0] | max)}), benchmark: $benchmark[0], workflow_run: $run_url}' \
+            '{head_sha: $head_sha, coverage_metadata: $coverage_metadata, checks: {unit: $unit, race: $race, fuzz_seeds: $fuzz, integration: $integration, benchmarks: $benchmark, test_overview: $overview, quality: $quality, security: $security, required_gate: $gate}, tests: $unit_report.tests, coverage: ($unit_report.coverage + {status: ($detailed_coverage[0].status // "unavailable"), total_percent: ($detailed_coverage[0].total_percent // $unit_report.coverage.total_percent), minimum_percent: ($detailed_coverage[0].minimum_percent // $unit_report.coverage.minimum_percent), threshold_met: $unit_report.coverage.threshold_met, test_packages: $unit_report.coverage.packages, packages: (if $detailed_coverage[0].status == "available" then $detailed_coverage[0].packages else $unit_report.coverage.packages end), zero_covered_functions_total: (($detailed_coverage[0].zero_covered_functions // []) | length), zero_covered_functions: (($detailed_coverage[0].zero_covered_functions // [])[:100]), zero_covered_functions_omitted: ([((($detailed_coverage[0].zero_covered_functions // []) | length) - 100), 0] | max)}), benchmark: $benchmark[0], workflow_run: $run_url}' \
             > "$RUNNER_TEMP/pr-check-summary.json"
 
       - name: Upload PR check summary

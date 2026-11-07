@@ -18,7 +18,7 @@ jobs:
   benchmark:
     name: Benchmarks
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -50,7 +50,7 @@ jobs:
             --arg os "$(go env GOOS)" \
             --arg arch "$(go env GOARCH)" \
             --arg command "make benchmarks" \
-            --argjson benchmark_count 10 \
+            --argjson benchmark_count 20 \
             '{format_version: 1, run_id: $run_id, commit: $commit, created_at: $created_at, go_version: $go_version, os: $os, arch: $arch, command: $command, benchmark_count: $benchmark_count}' \
             > "$baseline_dir/metadata.json"
       - name: Upload benchmark baseline
@@ -58,5 +58,45 @@ jobs:
         with:
           name: benchmark-baseline
           path: ${{ runner.temp }}/benchmark-baseline/
+          if-no-files-found: error
+          retention-days: 90
+
+  coverage-baseline:
+    name: Main coverage baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod download
+      - name: Generate main coverage baseline
+        env:
+          COVER_PROFILE: ${{ runner.temp }}/coverage-baseline/coverage.out
+          COVERAGE_DETAIL_REPORT_FILE: ${{ runner.temp }}/coverage-baseline/coverage-report.json
+        run: |
+          mkdir -p "$RUNNER_TEMP/coverage-baseline"
+          ./scripts/verify-coverage.sh
+          jq -n \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg commit "$GITHUB_SHA" \
+            --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg go_version "$(go env GOVERSION)" \
+            --arg os "$(go env GOOS)" \
+            --arg arch "$(go env GOARCH)" \
+            --arg command "go test -short -count=1 -covermode=atomic -coverprofile=coverage.out ./..." \
+            '{format_version: 1, run_id: $run_id, commit: $commit, created_at: $created_at, go_version: $go_version, os: $os, arch: $arch, command: $command}' \
+            > "$RUNNER_TEMP/coverage-baseline/metadata.json"
+      - name: Upload main coverage baseline
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-baseline
+          path: |
+            ${{ runner.temp }}/coverage-baseline/coverage-report.json
+            ${{ runner.temp }}/coverage-baseline/metadata.json
           if-no-files-found: error
           retention-days: 90
