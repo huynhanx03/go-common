@@ -119,16 +119,16 @@ jobs:
           fi
 
           runs="$(gh run list --repo "$REPOSITORY" --workflow main.yml --branch main --status success --limit 100 --json databaseId,headSha,createdAt 2>/dev/null || printf '[]')"
-          while IFS=$'\t' read -r run_id _head_sha _created_at; do
-            if [[ ! "$run_id" =~ ^[0-9]+$ ]]; then
+          while IFS=$'\t' read -r baseline_run_id _head_sha _created_at; do
+            if [[ ! "$baseline_run_id" =~ ^[0-9]+$ ]]; then
               continue
             fi
             rm -rf "$baseline_coverage_dir"
             mkdir -p "$baseline_coverage_dir"
-            if gh run download "$run_id" --repo "$REPOSITORY" --name coverage-baseline --dir "$baseline_coverage_dir" > "$RUNNER_TEMP/coverage-baseline-download.log" 2>&1 && \
+            if gh run download "$baseline_run_id" --repo "$REPOSITORY" --name coverage-baseline --dir "$baseline_coverage_dir" > "$RUNNER_TEMP/coverage-baseline-download.log" 2>&1 && \
               [[ -s "$baseline_coverage_dir/coverage-report.json" && -s "$baseline_coverage_dir/metadata.json" ]] && \
               jq -e '.status == "available" and (.packages | type == "array")' "$baseline_coverage_dir/coverage-report.json" > /dev/null 2>&1; then
-              echo "Using coverage baseline from main run $run_id."
+              echo "Using coverage baseline from main run $baseline_run_id."
               break
             fi
           done < <(jq -r '.[] | [.databaseId, .headSha, .createdAt] | @tsv' <<< "$runs")
