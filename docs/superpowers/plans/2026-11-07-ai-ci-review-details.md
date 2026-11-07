@@ -54,6 +54,8 @@
 - Modify: `Makefile`
 - Modify: `.github/workflows/main.yml`
 - Modify: `.github/workflows/ci.yml`
+- Create: `scripts/benchmark_report.py`
+- Create: `scripts/test_benchmark_report.py`
 - Modify: `scripts/verify-workflows.sh`
 
 **Interfaces:**
@@ -61,13 +63,13 @@
 - Successful `main` benchmark runs upload `benchmark-baseline/benchmark.txt` and `benchmark-baseline/metadata.json` with commit, timestamp, Go version, OS/architecture, and command.
 - PR benchmark job publishes a compact report containing baseline availability/provenance and `benchstat` comparison output.
 
-- [ ] Update the benchmark target to 10 samples and verify the command still uses `-tags=benchmark`, `-benchmem`, and all packages.
-- [ ] Capture benchmark stdout on `main`, create provenance metadata only after a successful run, and upload the baseline artifact with bounded retention.
-- [ ] On PRs, query the newest successful `main.yml` run and download its named artifact with read-only Actions permission; keep reusable non-PR CI as a single-current-revision benchmark.
-- [ ] Run the candidate benchmark at 10 samples; compare with the artifact using a pinned `benchstat` tool version when a compatible baseline exists.
-- [ ] Handle missing, expired, or incompatible baseline metadata as an explicit unavailable/incomparable report without failing required CI.
-- [ ] Extend workflow validation for benchmark sample count, artifact publication, cross-run read permission, and graceful baseline fallback.
-- [ ] Validate the comparison command against two small Go benchmark fixture files and confirm significant and inconclusive `benchstat` cases remain distinguishable.
+- [x] Update the benchmark target to 10 samples and verify the command still uses `-tags=benchmark`, `-benchmem`, and all packages.
+- [x] Capture benchmark stdout on `main`, create provenance metadata only after a successful run, and upload the baseline artifact with bounded retention.
+- [x] On PRs, query the newest successful `main.yml` run and download its named artifact with read-only Actions permission; keep reusable non-PR CI as a single-current-revision benchmark.
+- [x] Run the candidate benchmark at 10 samples in CI; compare with the artifact using a pinned `benchstat` tool version when a compatible baseline exists.
+- [x] Handle missing, expired, or incompatible baseline metadata as an explicit unavailable/incomparable report without failing required CI.
+- [x] Extend workflow validation for benchmark sample count, artifact publication, cross-run read permission, and graceful baseline fallback; run Python report tests in the quality job.
+- [x] Test compatible, missing, invalid, and environment-mismatched baselines; verify significant and inconclusive `benchstat` output is preserved. Local execution of the external tool was blocked by network restrictions; CI installs the pinned tool and runs the real comparison.
 
 ### Task 3: Add per-job CI failure diagnostics to the AI review
 

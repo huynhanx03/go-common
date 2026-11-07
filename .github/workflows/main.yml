@@ -18,7 +18,7 @@ jobs:
   benchmark:
     name: Benchmarks
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -29,4 +29,34 @@ jobs:
           cache: true
       - run: go mod download
       - name: Run benchmarks
-        run: make benchmarks
+        run: |
+          baseline_dir="$RUNNER_TEMP/benchmark-baseline"
+          mkdir -p "$baseline_dir"
+          log_file="$baseline_dir/benchmark.txt"
+          set +e
+          make benchmarks > "$log_file" 2>&1
+          result=$?
+          set -e
+          cat "$log_file"
+          if [[ "$result" -ne 0 ]]; then
+            exit "$result"
+          fi
+
+          jq -n \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg commit "$GITHUB_SHA" \
+            --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg go_version "$(go env GOVERSION)" \
+            --arg os "$(go env GOOS)" \
+            --arg arch "$(go env GOARCH)" \
+            --arg command "make benchmarks" \
+            --argjson benchmark_count 10 \
+            '{format_version: 1, run_id: $run_id, commit: $commit, created_at: $created_at, go_version: $go_version, os: $os, arch: $arch, command: $command, benchmark_count: $benchmark_count}' \
+            > "$baseline_dir/metadata.json"
+      - name: Upload benchmark baseline
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: benchmark-baseline
+          path: ${{ runner.temp }}/benchmark-baseline/
+          if-no-files-found: error
+          retention-days: 90

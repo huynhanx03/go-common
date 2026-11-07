@@ -59,16 +59,36 @@ grep -Fq 'actions/download-artifact@' "$ci" ||
   fail 'PR summary must retrieve the detailed coverage report artifact'
 grep -Fq 'zero_covered_functions_total:' "$ci" ||
   fail 'PR summary must include package and function coverage details'
+grep -Fq "python3 -m unittest discover -s scripts -p 'test_*report.py'" "$ci" ||
+  fail 'CI must run the coverage and benchmark report tests'
 grep -Fq 'zero_covered_functions_total' "$ci" ||
   fail 'AI coverage summary must report zero-covered function totals and truncation'
 grep -Fq 'uses: gitleaks/gitleaks-action@' "$ci" ||
   fail 'CI must scan the repository for leaked secrets'
 grep -Fq 'govulncheck@' "$ci" || fail 'CI must scan Go dependencies for known vulnerabilities'
 grep -Fq 'workflow_call:' "$ci" || fail 'CI must be reusable by the release workflow'
-grep -Fq 'make benchmarks > "$pr_log"' "$ci" ||
+grep -Fq 'make benchmarks > "$BENCHMARK_FILE"' "$ci" ||
   fail 'CI must run benchmarks'
-grep -Fq 'go install golang.org/x/perf/cmd/benchstat@latest' "$ci" ||
-  fail 'PR benchmarks must use benchstat for a statistical comparison'
+grep -Fq 'actions: read' "$ci" ||
+  fail 'PR benchmark job must have read-only Actions access for baseline artifacts'
+grep -Fq 'gh run list --repo "$REPOSITORY" --workflow main.yml' "$ci" ||
+  fail 'PR benchmark job must locate the latest successful main benchmark run'
+grep -Fq 'gh run download "$run_id" --repo "$REPOSITORY" --name benchmark-baseline' "$ci" ||
+  fail 'PR benchmark job must download the main baseline artifact'
+grep -Fq 'scripts/benchmark_report.py' "$ci" ||
+  fail 'PR benchmark job must publish an explicit comparison report'
+grep -Fq 'golang.org/x/perf/cmd/benchstat@v0.0.0-20260709024250-82a0b07e230d' "$ci" ||
+  fail 'PR benchmark comparisons must use the pinned benchstat version'
+grep -Fq 'name: benchmark-comparison' "$ci" ||
+  fail 'CI must publish the benchmark comparison report for the AI summary'
+grep -Fq 'benchmark_count 10' "$ci" ||
+  fail 'PR benchmark metadata must record ten samples per benchmark'
+grep -Fq 'benchmark_count 10' "$workflow_root/main.yml" ||
+  fail 'main benchmark metadata must record ten samples per benchmark'
+grep -Fq 'retention-days: 90' "$workflow_root/main.yml" ||
+  fail 'main workflow must retain benchmark baselines for a bounded period'
+grep -Fq -- '-benchmem -benchtime=500ms -count=10 ./...' "$root/Makefile" ||
+  fail 'benchmark target must run ten samples with allocation metrics across all packages'
 grep -Fq 'BENCHMARK_RESULT: ${{ needs.benchmark.result }}' "$ci" ||
   fail 'CI report and required gate must observe the benchmark result'
 grep -Fq '"$BENCHMARK_RESULT"' "$ci" ||
@@ -134,7 +154,7 @@ grep -Fq '<!-- go-common-release-preview -->' "$release_preview" ||
 
 benchmark="$workflow_root/main.yml"
 grep -Fq 'branches: [main]' "$benchmark" || fail 'benchmark workflow must run on main pushes only'
-grep -Fq 'run: make benchmarks' "$benchmark" ||
+grep -Fq 'make benchmarks > "$log_file"' "$benchmark" ||
   fail 'main benchmark workflow must run benchmarks'
 
 printf '%s\n' 'workflow permissions, action pins, checkout credentials, and required gate verified'
