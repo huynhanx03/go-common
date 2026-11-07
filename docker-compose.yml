@@ -61,3 +61,17 @@ services:
       service: debezium
     ports:
       - "8083:8083"
+
+  temporal:
+    extends:
+      file: ./docker/temporal.yml
+      service: temporal
+    profiles: ["temporal"]
+    ports:
+      - "127.0.0.1:7233:7233"
+      - "127.0.0.1:8233:8233"
+    volumes:
+      - temporal-data:/var/lib/temporal
+
+volumes:
+  temporal-data:

@@ -9,11 +9,12 @@ import (
 // httpCodeOverrides lists business codes whose HTTP status deviates from
 // their range mapping below.
 var httpCodeOverrides = map[int]int{
-	apperr.CodeCreated:          http.StatusCreated,               // 201 within the 2xx range
-	apperr.CodeValidationFailed: http.StatusUnprocessableEntity,   // 422 within the 400 range
-	apperr.CodeBodyTooLarge:     http.StatusRequestEntityTooLarge, // 413 within the 400 range
-	apperr.CodeAccountNotFound:  http.StatusNotFound,              // resource lookup miss, not an auth failure
-	apperr.CodeGatewayTimeout:   http.StatusGatewayTimeout,
+	apperr.CodeCreated:            http.StatusCreated,               // 201 within the 2xx range
+	apperr.CodeValidationFailed:   http.StatusUnprocessableEntity,   // 422 within the 400 range
+	apperr.CodeBodyTooLarge:       http.StatusRequestEntityTooLarge, // 413 within the 400 range
+	apperr.CodeAccountNotFound:    http.StatusNotFound,              // resource lookup miss, not an auth failure
+	apperr.CodeGatewayTimeout:     http.StatusGatewayTimeout,
+	apperr.CodeServiceUnavailable: http.StatusServiceUnavailable,
 }
 
 // httpCodeRanges maps business-code ranges [min, max) to HTTP statuses.

@@ -271,6 +271,55 @@ func TestFetchRefreshReturnsStaleValueAndHonorsCapacity(t *testing.T) {
 	}
 }
 
+func TestFetchOptionsControlSharedTierAndBackgroundRefresh(t *testing.T) {
+	t.Run("L1 only bypasses L2 reads and writes", func(t *testing.T) {
+		l1, l2 := newMemoryL1(), newMemoryL2()
+		oldValue, err := encodeEntry(newEntry(1, time.Minute, 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		l2.versions["key"] = "v1"
+		l2.values["key"] = oldValue
+		c := newTestCache(t, l1, l2)
+		defer c.Close()
+
+		loads := 0
+		got, err := Fetch[int](context.Background(), c, "key", time.Minute, func(context.Context) (int, error) {
+			loads++
+			return 2, nil
+		}, L1Only())
+		if err != nil || got != 2 || loads != 1 {
+			t.Fatalf("L1Only Fetch = %d, %v; loader calls=%d", got, err, loads)
+		}
+		if string(l2.values["key"]) != string(oldValue) {
+			t.Fatal("L1Only changed the shared cache entry")
+		}
+		if cached, ok := l1.Get(context.Background(), "key"); !ok || cached.(entry[int]).Value != 2 {
+			t.Fatalf("L1Only did not cache the loaded value in L1: %v", cached)
+		}
+	})
+
+	t.Run("without refresh leaves a stale value for the caller", func(t *testing.T) {
+		l1 := newMemoryL1()
+		l1.versions["key"] = "v1"
+		l1.values["key"] = entry[int]{Value: 1, ExpireAt: time.Now().Add(time.Second).UnixMilli(), DeltaMs: 1_000_000_000_000}
+		c := newTestCache(t, l1, nil)
+		defer c.Close()
+
+		loads := 0
+		got, err := Fetch[int](context.Background(), c, "key", time.Minute, func(context.Context) (int, error) {
+			loads++
+			return 2, nil
+		}, WithoutRefresh())
+		if err != nil || got != 1 || loads != 0 {
+			t.Fatalf("WithoutRefresh Fetch = %d, %v; loader calls=%d", got, err, loads)
+		}
+		if cached, ok := l1.Get(context.Background(), "key"); !ok || cached.(entry[int]).Value != 1 {
+			t.Fatalf("WithoutRefresh replaced the stale value: %v", cached)
+		}
+	})
+}
+
 func TestLoadDoesNotCacheAfterContextCancellation(t *testing.T) {
 	l1 := newMemoryL1()
 	c := newTestCache(t, l1, nil)

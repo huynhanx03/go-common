@@ -1,6 +1,8 @@
 package middlewares
 
 import (
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -24,5 +26,28 @@ func TestBodyLimitRejectsKnownOversizeBodyBeforeHandler(t *testing.T) {
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/", strings.NewReader("12345")))
 	if recorder.Code != http.StatusRequestEntityTooLarge || called {
 		t.Fatalf("status=%d handler_called=%v, want 413 and no handler", recorder.Code, called)
+	}
+}
+
+func TestBodyLimitCapsUnknownLengthStreamingBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var readErr error
+	var bytesRead int
+	router := gin.New()
+	router.Use(BodyLimit(4))
+	router.POST("/", func(c *gin.Context) {
+		body, err := io.ReadAll(c.Request.Body)
+		readErr = err
+		bytesRead = len(body)
+		c.Status(http.StatusNoContent)
+	})
+
+	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("123456"))
+	request.ContentLength = -1
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	var tooLarge *http.MaxBytesError
+	if !errors.As(readErr, &tooLarge) || bytesRead > 4 {
+		t.Fatalf("streaming body read = %d bytes, error %v; want size limit", bytesRead, readErr)
 	}
 }

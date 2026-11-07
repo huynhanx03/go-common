@@ -73,9 +73,13 @@ func NewTokenBucket(opts ...TokenBucketOption) *TokenBucket {
 	return tb
 }
 
-// Allow checks whether n tokens can be consumed.
+// Allow checks whether a positive number of tokens can be consumed.
 // Returns true and consumes the tokens if available, false otherwise.
 func (tb *TokenBucket) Allow(n int) bool {
+	if n <= 0 {
+		return false
+	}
+
 	tb.mu.Lock()
 	defer tb.mu.Unlock()
 

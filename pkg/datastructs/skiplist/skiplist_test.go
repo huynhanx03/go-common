@@ -191,6 +191,43 @@ func TestUpdateScore(t *testing.T) {
 	}
 }
 
+func TestRangeByScoreReturnsNoMembersForImpossibleRanges(t *testing.T) {
+	sl := New()
+	for _, score := range []float64{1, 2, 3} {
+		sl.Insert(score, fmt.Sprintf("item-%g", score))
+	}
+	for _, query := range []ScoreRange{
+		{Min: 4, Max: 2},
+		{Min: 2, Max: 2, MinExclusive: true},
+		{Min: 2, Max: 2, MaxExclusive: true},
+		{Min: 0, Max: 0},
+		{Min: 4, Max: 5},
+	} {
+		if got := sl.RangeByScore(query); len(got) != 0 {
+			t.Errorf("RangeByScore(%+v) returned %v", query, got)
+		}
+	}
+}
+
+func TestUpdateScoreKeepsAdjacentPositionAndRejectsMissingMember(t *testing.T) {
+	sl := New()
+	for _, entry := range []struct {
+		score float64
+		key   string
+	}{{1, "a"}, {2, "b"}, {3, "c"}} {
+		sl.Insert(entry.score, entry.key)
+	}
+	if got := sl.UpdateScore(2, "b", 2); got == nil || got.Score != 2 {
+		t.Fatalf("same-position score update = %v", got)
+	}
+	if got := sl.GetRank(2, "b"); got != 2 {
+		t.Fatalf("rank after adjacent update = %d, want 2", got)
+	}
+	if got := sl.UpdateScore(9, "missing", 1); got != nil {
+		t.Fatalf("missing member update = %v, want nil", got)
+	}
+}
+
 func TestDuplicateScores(t *testing.T) {
 	sl := New()
 

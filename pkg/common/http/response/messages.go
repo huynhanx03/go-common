@@ -37,9 +37,10 @@ var Msg = map[int]string{
 	apperr.CodeConflict: "Conflict",
 
 	// Server errors
-	apperr.CodeInternalServer: "Internal server error",
-	apperr.CodeDatabaseError:  "Database error",
-	apperr.CodeMongoDBError:   "MongoDB error",
-	apperr.CodeRedisError:     "Redis error",
-	apperr.CodeGatewayTimeout: "Request deadline exceeded",
+	apperr.CodeInternalServer:     "Internal server error",
+	apperr.CodeDatabaseError:      "Database error",
+	apperr.CodeMongoDBError:       "MongoDB error",
+	apperr.CodeRedisError:         "Redis error",
+	apperr.CodeGatewayTimeout:     "Request deadline exceeded",
+	apperr.CodeServiceUnavailable: "Service temporarily unavailable",
 }

@@ -153,6 +153,62 @@ func TestZSet_NonExistent(t *testing.T) {
 	assertFalse(t, ok)
 }
 
+func TestZSetContainsTracksUpdatesAndRemoval(t *testing.T) {
+	z := New()
+	if z.Contains("alice") {
+		t.Fatal("empty set contains an unknown member")
+	}
+	if !z.Add("alice", 10) || !z.Contains("alice") {
+		t.Fatal("new member was not visible")
+	}
+	if z.Add("alice", 20) || !z.Contains("alice") {
+		t.Fatal("score update changed member existence")
+	}
+	if !z.Rem("alice") || z.Contains("alice") {
+		t.Fatal("removed member remains in set")
+	}
+}
+
+func TestZSetForEachUsesAscendingRankAndStopsOnCallback(t *testing.T) {
+	z := New()
+	for key, score := range map[string]float64{"c": 30, "a": 10, "b": 20} {
+		z.Add(key, score)
+	}
+	var visited []Member
+	z.ForEach(func(rank int, key string, score float64) bool {
+		if rank != len(visited) {
+			t.Fatalf("callback rank = %d after %d visits", rank, len(visited))
+		}
+		visited = append(visited, Member{Key: key, Score: score})
+		return rank < 1
+	})
+	if len(visited) != 2 || visited[0] != (Member{Key: "a", Score: 10}) || visited[1] != (Member{Key: "b", Score: 20}) {
+		t.Fatalf("visited members = %+v, want the first two ascending members", visited)
+	}
+
+	called := false
+	New().ForEach(func(int, string, float64) bool { called = true; return true })
+	if called {
+		t.Fatal("ForEach invoked callback for an empty set")
+	}
+}
+
+func TestZSetRevRangeNormalizesNegativeAndOutOfRangeIndexes(t *testing.T) {
+	z := New()
+	for _, member := range []Member{{Key: "a", Score: 1}, {Key: "b", Score: 2}, {Key: "c", Score: 3}} {
+		z.Add(member.Key, member.Score)
+	}
+	if got := z.RevRange(-2, -1); len(got) != 2 || got[0].Key != "b" || got[1].Key != "a" {
+		t.Fatalf("RevRange(-2, -1) = %+v", got)
+	}
+	if got := z.RevRange(0, 10); len(got) != 3 || got[0].Key != "c" || got[2].Key != "a" {
+		t.Fatalf("RevRange(0, 10) = %+v", got)
+	}
+	if got := z.RevRange(-10, -8); len(got) != 0 {
+		t.Fatalf("out-of-range RevRange = %+v, want empty", got)
+	}
+}
+
 // --- helpers ---
 
 func assertEqual(t *testing.T, expected, actual any) {

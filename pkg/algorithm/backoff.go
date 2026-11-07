@@ -131,6 +131,9 @@ func NewLinearBackoff(initial, max time.Duration) *LinearBackoff {
 }
 
 func (b *LinearBackoff) Delay(attempt int) time.Duration {
+	if attempt >= 0 && int64(attempt) >= int64(b.max/b.initial) {
+		return b.max
+	}
 	d := b.initial * time.Duration(attempt+1)
 	if d > b.max {
 		return b.max

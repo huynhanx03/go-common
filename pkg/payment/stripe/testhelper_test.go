@@ -26,6 +26,10 @@ type capturedRequest struct {
 // newTestProvider builds a provider whose Stripe client talks to a stub backend
 // that replies with body for every request.
 func newTestProvider(t *testing.T, body string) (*Provider, *capturedRequest) {
+	return newTestProviderWithStatus(t, http.StatusOK, body)
+}
+
+func newTestProviderWithStatus(t *testing.T, status int, body string) (*Provider, *capturedRequest) {
 	t.Helper()
 
 	captured := &capturedRequest{}
@@ -42,6 +46,7 @@ func newTestProvider(t *testing.T, body string) (*Provider, *capturedRequest) {
 		captured.idempotencyKey = r.Header.Get("Idempotency-Key")
 
 		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
 		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(srv.Close)

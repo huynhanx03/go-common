@@ -63,6 +63,26 @@ func TestFetchSubscriptionMapsItemsAndRefs(t *testing.T) {
 	}
 }
 
+func TestFetchWithLatestInvoiceExpandsCurrentBillingState(t *testing.T) {
+	t.Parallel()
+
+	provider, captured := newTestProvider(t, `{
+	  "id":"sub_1","object":"subscription","status":"active",
+	  "latest_invoice":{"id":"in_1","object":"invoice","status":"paid","currency":"usd","amount_paid":9900,"total":9900}
+	}`)
+	subscription, appErr := provider.FetchWithLatestInvoice(context.Background(), "sub_1")
+	if appErr != nil {
+		t.Fatalf("FetchWithLatestInvoice returned an error: %v", appErr)
+	}
+	if captured.path != "/v1/subscriptions/sub_1" {
+		t.Fatalf("request path = %q", captured.path)
+	}
+	assertQueryContains(t, captured.form, "expand", "latest_invoice")
+	if subscription.LatestInvoiceRef != "in_1" || !subscription.LatestInvoicePaid || subscription.LatestInvoice == nil || subscription.LatestInvoice.AmountPaid != payment.NewMoney(9900, "usd") {
+		t.Fatalf("latest invoice mapping = %+v", subscription)
+	}
+}
+
 func TestChangePlanItemSendsProrationAndItem(t *testing.T) {
 	t.Parallel()
 
@@ -97,6 +117,52 @@ func TestChangePlanItemSendsProrationAndItem(t *testing.T) {
 
 	if captured.idempotencyKey != "change:1" {
 		t.Fatalf("idempotency = %q", captured.idempotencyKey)
+	}
+}
+
+func TestUpgradeWithPendingInvoiceUsesConfirmationExpansion(t *testing.T) {
+	t.Parallel()
+
+	provider, captured := newTestProvider(t, subscriptionBody)
+	_, appErr := provider.UpgradeWithPendingInvoice(context.Background(), &payment.PlanItemChange{
+		SubscriptionRef: "sub_1",
+		ItemRef:         "si_1",
+		PriceRef:        "price_2",
+		IdempotencyKey:  "upgrade:1",
+	})
+	if appErr != nil {
+		t.Fatalf("UpgradeWithPendingInvoice returned an error: %v", appErr)
+	}
+	if captured.method != "POST" || captured.path != "/v1/subscriptions/sub_1" || captured.idempotencyKey != "upgrade:1" {
+		t.Fatalf("upgrade request = %s %s, idempotency %q", captured.method, captured.path, captured.idempotencyKey)
+	}
+	if captured.formValue("payment_behavior") != "pending_if_incomplete" || captured.formValue("proration_behavior") != "always_invoice" {
+		t.Fatalf("upgrade behavior = %v", captured.form)
+	}
+	assertQueryContains(t, captured.form, "expand", "latest_invoice.confirmation_secret")
+	assertQueryContains(t, captured.form, "expand", "latest_invoice.payments.data.payment")
+}
+
+func TestResetBillingAnchorAndSetDefaultPaymentMethod(t *testing.T) {
+	t.Parallel()
+
+	provider, captured := newTestProvider(t, subscriptionBody)
+	if _, appErr := provider.ResetBillingAnchorNow(context.Background(), &payment.SubscriptionRef{SubscriptionRef: "sub_1", IdempotencyKey: "anchor:1"}); appErr != nil {
+		t.Fatalf("ResetBillingAnchorNow returned an error: %v", appErr)
+	}
+	if captured.formValue("billing_cycle_anchor") != "now" || captured.formValue("proration_behavior") != payment.ProrationNone.String() || captured.idempotencyKey != "anchor:1" {
+		t.Fatalf("billing anchor request = %v, idempotency %q", captured.form, captured.idempotencyKey)
+	}
+
+	if _, appErr := provider.SetDefaultPaymentMethod(context.Background(), &payment.DefaultPaymentMethodChange{
+		SubscriptionRef:  "sub_1",
+		PaymentMethodRef: "pm_2",
+		IdempotencyKey:   "default-pm:1",
+	}); appErr != nil {
+		t.Fatalf("SetDefaultPaymentMethod returned an error: %v", appErr)
+	}
+	if captured.formValue("default_payment_method") != "pm_2" || captured.idempotencyKey != "default-pm:1" {
+		t.Fatalf("default payment method request = %v, idempotency %q", captured.form, captured.idempotencyKey)
 	}
 }
 

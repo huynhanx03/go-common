@@ -1,6 +1,8 @@
 package middlewares
 
 import (
+	"errors"
+
 	"github.com/gin-gonic/gin"
 
 	"github.com/huynhanx03/go-common/pkg/algorithm"
@@ -25,22 +27,18 @@ func CircuitBreakerMiddleware(cb *algorithm.CircuitBreaker) gin.HandlerFunc {
 			internalServerError(c)
 			return
 		}
-		if err := cb.Allow(); err != nil {
-			response.ErrorResponse(c, apperr.CodeInternalServer, apperr.New(
-				apperr.CodeInternalServer,
+		err := cb.Execute(func() (bool, error) {
+			c.Next()
+			return c.Writer.Status() < cbServerErrorThreshold, nil
+		})
+		if errors.Is(err, algorithm.ErrCircuitOpen) {
+			response.ErrorResponse(c, apperr.CodeServiceUnavailable, apperr.New(
+				apperr.CodeServiceUnavailable,
 				"service temporarily unavailable",
 				err,
 			))
 			c.Abort()
 			return
-		}
-
-		c.Next()
-
-		if c.Writer.Status() >= cbServerErrorThreshold {
-			cb.RecordFailure()
-		} else {
-			cb.RecordSuccess()
 		}
 	}
 }

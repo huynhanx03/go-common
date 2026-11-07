@@ -36,3 +36,23 @@ func TestComposeRunsOnceInDeclaredOrder(t *testing.T) {
 		t.Fatalf("order = %q, want %q", got, want)
 	}
 }
+
+func TestComposeHandlersCopiesDeclaredChain(t *testing.T) {
+	t.Parallel()
+
+	var order []string
+	first := func(c *gin.Context) { order = append(order, "first"); c.Next() }
+	second := func(c *gin.Context) { order = append(order, "second"); c.Next() }
+	chain := []gin.HandlerFunc{first, second}
+	composed := ComposeHandlers(chain...)
+	chain[0] = func(c *gin.Context) { order = append(order, "replaced") }
+	composed = append(composed, func(c *gin.Context) { order = append(order, "handler") })
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET("/", composed...)
+	router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+	if got := strings.Join(order, ","); got != "first,second,handler" {
+		t.Fatalf("composed order = %q", got)
+	}
+}

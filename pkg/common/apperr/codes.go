@@ -43,9 +43,10 @@ const (
 	CodeConflict = 49000 // Conflict
 
 	// Server error codes (50000-59999)
-	CodeInternalServer = 50000 // Internal server error
-	CodeDatabaseError  = 50001 // Database error
-	CodeMongoDBError   = 50002 // MongoDB error
-	CodeRedisError     = 50003 // Redis error
-	CodeGatewayTimeout = 50004 // Request deadline exceeded (maps to 504)
+	CodeInternalServer     = 50000 // Internal server error
+	CodeDatabaseError      = 50001 // Database error
+	CodeMongoDBError       = 50002 // MongoDB error
+	CodeRedisError         = 50003 // Redis error
+	CodeGatewayTimeout     = 50004 // Request deadline exceeded (maps to 504)
+	CodeServiceUnavailable = 50300 // Service temporarily unavailable
 )

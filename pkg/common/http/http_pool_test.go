@@ -66,3 +66,38 @@ func TestHTTPClientPoolDoExposesAttemptMetadata(t *testing.T) {
 		t.Fatalf("response=%#v attempts=%+v", response, attempts)
 	}
 }
+
+func TestHTTPClientPoolCacheLifecycle(t *testing.T) {
+	t.Parallel()
+
+	pool := NewHTTPClientPool(nil)
+	if _, found := pool.GetFromCache("profile"); found {
+		t.Fatal("new client cache returned a value for a missing key")
+	}
+	pool.SetCache("profile", "first")
+	pool.SetCache("profile", "updated")
+	if got, found := pool.GetFromCache("profile"); !found || got != "updated" {
+		t.Fatalf("cache lookup = (%v, %v), want updated value", got, found)
+	}
+	pool.SetCache("settings", 3)
+	pool.ClearCache()
+	for _, key := range []string{"profile", "settings"} {
+		if got, found := pool.GetFromCache(key); found {
+			t.Errorf("cache retained %q = %v after clear", key, got)
+		}
+	}
+}
+
+func TestHTTPClientPoolDoRejectsNilPool(t *testing.T) {
+	t.Parallel()
+
+	var pool *HTTPClientPool
+	request, err := nethttp.NewRequest(nethttp.MethodGet, "https://example.test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, attempts, err := pool.Do(context.Background(), request, RetryPolicy{})
+	if err == nil || response != nil || attempts != nil {
+		t.Fatalf("Do on nil pool = (%v, %v, %v), want invalid request", response, attempts, err)
+	}
+}
