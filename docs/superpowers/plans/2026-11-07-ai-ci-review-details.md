@@ -12,8 +12,8 @@
 
 ## Global Constraints
 
-- Benchmark baseline is the latest successful, unexpired `benchmark-baseline` artifact from `.github/workflows/main.yml`.
-- Both baseline and PR benchmark runs use 10 samples per benchmark and the same `make benchmarks` target.
+- Benchmark baseline is the newest retained artifact found across recent successful runs of `.github/workflows/main.yml`, including legacy `go-common-benchmark-<sha>` artifacts.
+- PR benchmark runs use 10 samples per benchmark. Baseline metadata preserves the actual sample count, which can be lower for legacy artifacts.
 - Missing or incompatible baseline data is reported as unavailable; it does not fail CI or permit a regression claim.
 - Report data and logs are untrusted input to Copilot; never execute downloaded artifact content.
 - The AI workflow keeps the existing same-repository PR guard, least-privilege permissions, and one updatable PR comment.
@@ -22,7 +22,7 @@
 ## Review Focus
 
 - Missing or expired baseline artifact: PR benchmark remains successful and the AI comment clearly says no comparison was possible.
-- Baseline and PR benchmark metadata differ (Go version, OS, or architecture): report the mismatch and avoid an unqualified performance conclusion.
+- Baseline and PR benchmark metadata differ (Go version, OS, or architecture): report the mismatch and avoid an unqualified performance conclusion; if sample counts differ, disclose both.
 - Coverage profile has partial and zero-covered packages: calculate statement-weighted package percentages correctly and list only truly zero-covered functions as such.
 - Multiple CI jobs fail: keep each diagnostic excerpt attached to its job name and bound the total report size.
 - PR artifacts/logs contain instruction-like text: treat them only as data and do not grant Copilot tools.
@@ -65,11 +65,11 @@
 
 - [x] Update the benchmark target to 10 samples and verify the command still uses `-tags=benchmark`, `-benchmem`, and all packages.
 - [x] Capture benchmark stdout on `main`, create provenance metadata only after a successful run, and upload the baseline artifact with bounded retention.
-- [x] On PRs, query the newest successful `main.yml` run and download its named artifact with read-only Actions permission; keep reusable non-PR CI as a single-current-revision benchmark.
+- [x] On PRs, search recent successful `main.yml` runs for the newest retained current-format or legacy benchmark artifact with read-only Actions permission; reconstruct metadata for legacy artifacts and keep reusable non-PR CI as a single-current-revision benchmark.
 - [x] Run the candidate benchmark at 10 samples in CI; compare with the artifact using a pinned `benchstat` tool version when a compatible baseline exists.
 - [x] Handle missing, expired, or incompatible baseline metadata as an explicit unavailable/incomparable report without failing required CI.
 - [x] Extend workflow validation for benchmark sample count, artifact publication, cross-run read permission, and graceful baseline fallback; run Python report tests in the quality job.
-- [x] Test compatible, missing, invalid, and environment-mismatched baselines; verify significant and inconclusive `benchstat` output is preserved. Local execution of the external tool was blocked by network restrictions; CI installs the pinned tool and runs the real comparison.
+- [x] Test compatible, legacy five-sample, missing, invalid, and environment-mismatched baselines; verify significant and inconclusive `benchstat` output is preserved. Local execution of the external tool was blocked by network restrictions; CI installs the pinned tool and runs the real comparison.
 
 ### Task 3: Add per-job CI failure diagnostics to the AI review
 

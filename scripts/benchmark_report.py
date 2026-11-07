@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 METADATA_FIELDS = ("format_version", "commit", "created_at", "go_version", "os", "arch", "benchmark_count", "command")
-COMPARISON_FIELDS = ("go_version", "os", "arch", "benchmark_count", "command")
+COMPARISON_FIELDS = ("go_version", "os", "arch", "command")
 MAX_COMPARISON_CHARS = 20000
 
 
@@ -18,13 +18,13 @@ def valid_metadata(metadata):
         and metadata.get("format_version") == 1
         and all(isinstance(metadata.get(field), str) and metadata[field] for field in METADATA_FIELDS if field != "format_version" and field != "benchmark_count")
         and isinstance(metadata.get("benchmark_count"), int)
-        and metadata["benchmark_count"] == 10
+        and metadata["benchmark_count"] > 0
         and metadata.get("command") == "make benchmarks"
     )
 
 
 def public_metadata(metadata):
-    return {key: metadata[key] for key in (*METADATA_FIELDS, "run_id") if key in metadata}
+    return {key: metadata[key] for key in (*METADATA_FIELDS, "run_id", "artifact_format") if key in metadata}
 
 
 def unavailable(reason, candidate_metadata=None, baseline_metadata=None):
@@ -40,8 +40,10 @@ def unavailable(reason, candidate_metadata=None, baseline_metadata=None):
 def build_report(candidate_path, candidate_metadata, baseline_path, baseline_metadata, benchstat_command):
     if not valid_metadata(candidate_metadata):
         return unavailable("candidate benchmark metadata is missing or invalid", candidate_metadata, baseline_metadata)
+    if candidate_metadata["benchmark_count"] != 10:
+        return unavailable("candidate benchmark run must contain ten samples", candidate_metadata, baseline_metadata)
     if baseline_path is None or not Path(baseline_path).is_file():
-        return unavailable("no successful main benchmark-baseline artifact is available", candidate_metadata)
+        return unavailable("no retained successful main benchmark baseline artifact is available", candidate_metadata)
     if not valid_metadata(baseline_metadata):
         return unavailable("baseline benchmark metadata is missing or invalid", candidate_metadata, baseline_metadata)
 
@@ -78,6 +80,7 @@ def build_report(candidate_path, candidate_metadata, baseline_path, baseline_met
         return unavailable("benchstat returned no comparison output", candidate_metadata, baseline_metadata)
 
     truncated = len(comparison) > MAX_COMPARISON_CHARS
+    sample_counts_match = candidate_metadata["benchmark_count"] == baseline_metadata["benchmark_count"]
     return {
         "status": "available",
         "reason": None,
@@ -85,6 +88,8 @@ def build_report(candidate_path, candidate_metadata, baseline_path, baseline_met
         "baseline": public_metadata(baseline_metadata),
         "comparison": comparison[:MAX_COMPARISON_CHARS],
         "comparison_truncated": truncated,
+        "sample_counts_match": sample_counts_match,
+        "sample_count_notice": None if sample_counts_match else "baseline and candidate sample counts differ; interpret p-values cautiously",
         "method": "golang.org/x/perf/cmd/benchstat",
         "interpretation": "benchstat uses p-values; '~' denotes no statistically significant difference.",
     }

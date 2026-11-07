@@ -49,6 +49,33 @@ class BenchmarkReportTest(unittest.TestCase):
         self.assertIn("go_version", report["reason"])
         self.assertIsNone(report["comparison"])
 
+    def test_compares_legacy_baseline_with_fewer_samples_and_reports_the_difference(self):
+        fake_benchstat = self.root / "benchstat.py"
+        fake_benchstat.write_text("print('BenchmarkEncode-8 -20.00% (p=0.01 n=10)')\n", encoding="utf-8")
+        baseline_metadata = {**self.baseline_metadata, "benchmark_count": 5}
+
+        report = build_report(
+            self.candidate,
+            self.candidate_metadata,
+            self.baseline,
+            baseline_metadata,
+            [sys.executable, str(fake_benchstat)],
+        )
+
+        self.assertEqual(report["status"], "available")
+        self.assertFalse(report["sample_counts_match"])
+        self.assertIn("interpret p-values cautiously", report["sample_count_notice"])
+        self.assertEqual(report["candidate"]["benchmark_count"], 10)
+        self.assertEqual(report["baseline"]["benchmark_count"], 5)
+
+    def test_candidate_must_keep_ten_samples(self):
+        metadata = {**self.candidate_metadata, "benchmark_count": 5}
+
+        report = build_report(self.candidate, metadata, self.baseline, self.baseline_metadata, ["missing-benchstat"])
+
+        self.assertEqual(report["status"], "unavailable")
+        self.assertIn("ten samples", report["reason"])
+
     def test_preserves_significant_and_inconclusive_benchstat_results(self):
         fake_benchstat = self.root / "benchstat.py"
         fake_benchstat.write_text(

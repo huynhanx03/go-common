@@ -73,8 +73,14 @@ grep -Fq 'actions: read' "$ci" ||
   fail 'PR benchmark job must have read-only Actions access for baseline artifacts'
 grep -Fq 'gh run list --repo "$REPOSITORY" --workflow main.yml' "$ci" ||
   fail 'PR benchmark job must locate the latest successful main benchmark run'
+grep -Fq -- '--limit 100 --json databaseId,headSha,createdAt' "$ci" ||
+  fail 'PR benchmark job must search retained successful main runs for the newest artifact'
 grep -Fq 'gh run download "$run_id" --repo "$REPOSITORY" --name benchmark-baseline' "$ci" ||
-  fail 'PR benchmark job must download the main baseline artifact'
+  fail 'PR benchmark job must download the current-format main baseline artifact'
+grep -Fq 'legacy_artifact="go-common-benchmark-$head_sha"' "$ci" ||
+  fail 'PR benchmark job must fall back to retained legacy main benchmark artifacts'
+grep -Fq 'artifact_format: "legacy"' "$ci" ||
+  fail 'PR benchmark job must mark metadata reconstructed from legacy artifacts'
 grep -Fq 'scripts/benchmark_report.py' "$ci" ||
   fail 'PR benchmark job must publish an explicit comparison report'
 grep -Fq 'golang.org/x/perf/cmd/benchstat@v0.0.0-20260709024250-82a0b07e230d' "$ci" ||
@@ -131,6 +137,12 @@ grep -Fq 'zero_covered_functions_total' "$workflow_root/ai-review.yml" ||
   fail 'AI prompt must report coverage gaps and omitted function counts'
 grep -Fq 'p < 0.05' "$workflow_root/ai-review.yml" ||
   fail 'AI prompt must interpret benchmark significance conservatively'
+grep -Fq 'Write the comment in English' "$workflow_root/ai-review.yml" ||
+  fail 'AI CI review comments must be written in English'
+grep -Fq 'If sample counts differ, call that out' "$workflow_root/ai-review.yml" ||
+  fail 'AI prompt must disclose unequal benchmark sample counts'
+grep -Fq 'If baseline.artifact_format is legacy, say so' "$workflow_root/ai-review.yml" ||
+  fail 'AI prompt must disclose legacy benchmark baselines'
 ! grep -Eq -- '--log-failed[^|]*\|[[:space:]]*tail' "$workflow_root/ai-review.yml" ||
   fail 'AI PR review must not use a global tail-only log excerpt'
 grep -Fq 'copilot -p ' "$workflow_root/ai-review.yml" ||

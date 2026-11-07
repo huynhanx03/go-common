@@ -142,16 +142,62 @@ jobs:
         run: |
           baseline_dir="$RUNNER_TEMP/benchmark-baseline"
           mkdir -p "$baseline_dir"
-          runs="$(gh run list --repo "$REPOSITORY" --workflow main.yml --branch main --status success --limit 1 --json databaseId 2>/dev/null || printf '[]')"
-          run_id="$(jq -r '.[0].databaseId // empty' <<< "$runs")"
-          if [[ -z "$run_id" ]]; then
-            echo "No successful main benchmark run is available yet."
-            exit 0
-          fi
-          if ! gh run download "$run_id" --repo "$REPOSITORY" --name benchmark-baseline --dir "$baseline_dir" > "$RUNNER_TEMP/benchmark-baseline-download.log" 2>&1; then
-            cat "$RUNNER_TEMP/benchmark-baseline-download.log"
-            find "$baseline_dir" -mindepth 1 -delete
-            echo "The latest successful main run has no retained benchmark baseline artifact."
+          runs="$(gh run list --repo "$REPOSITORY" --workflow main.yml --branch main --status success --limit 100 --json databaseId,headSha,createdAt 2>/dev/null || printf '[]')"
+          found_baseline=false
+          while IFS=$'\t' read -r run_id head_sha created_at; do
+            if [[ ! "$run_id" =~ ^[0-9]+$ || ! "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              continue
+            fi
+
+            rm -rf "$baseline_dir"
+            mkdir -p "$baseline_dir"
+            if gh run download "$run_id" --repo "$REPOSITORY" --name benchmark-baseline --dir "$baseline_dir" > "$RUNNER_TEMP/benchmark-baseline-download.log" 2>&1 && \
+              [[ -s "$baseline_dir/benchmark.txt" ]] && jq -e 'type == "object"' "$baseline_dir/metadata.json" > /dev/null 2>&1; then
+              echo "Using benchmark-baseline artifact from main run $run_id."
+              found_baseline=true
+              break
+            fi
+
+            rm -rf "$baseline_dir"
+            mkdir -p "$baseline_dir"
+            legacy_artifact="go-common-benchmark-$head_sha"
+            if ! gh run download "$run_id" --repo "$REPOSITORY" --name "$legacy_artifact" --dir "$baseline_dir" > "$RUNNER_TEMP/benchmark-baseline-download.log" 2>&1 || \
+              [[ ! -s "$baseline_dir/benchmark.txt" ]]; then
+              continue
+            fi
+
+            go_mod_content=""
+            makefile_content=""
+            if ! go_mod_content="$(gh api "repos/$REPOSITORY/contents/go.mod?ref=$head_sha" --jq .content 2>/dev/null | base64 --decode 2>/dev/null)"; then
+              go_mod_content=""
+            fi
+            if ! makefile_content="$(gh api "repos/$REPOSITORY/contents/Makefile?ref=$head_sha" --jq .content 2>/dev/null | base64 --decode 2>/dev/null)"; then
+              makefile_content=""
+            fi
+            baseline_go_version="$(sed -nE 's/^go[[:space:]]+([^[:space:]]+).*/go\1/p' <<< "$go_mod_content" | head -n 1)"
+            baseline_benchmark_count="$(sed -nE 's/.*-count=([0-9]+).*/\1/p' <<< "$makefile_content" | head -n 1)"
+            if [[ -z "$baseline_go_version" || -z "$baseline_benchmark_count" ]]; then
+              rm -rf "$baseline_dir"
+              mkdir -p "$baseline_dir"
+              continue
+            fi
+
+            jq -n \
+              --arg run_id "$run_id" \
+              --arg commit "$head_sha" \
+              --arg created_at "$created_at" \
+              --arg go_version "$baseline_go_version" \
+              --arg command "make benchmarks" \
+              --argjson benchmark_count "$baseline_benchmark_count" \
+              '{format_version: 1, artifact_format: "legacy", run_id: $run_id, commit: $commit, created_at: $created_at, go_version: $go_version, os: "linux", arch: "amd64", command: $command, benchmark_count: $benchmark_count}' \
+              > "$baseline_dir/metadata.json"
+            echo "Using legacy benchmark artifact from main run $run_id ($baseline_benchmark_count samples)."
+            found_baseline=true
+            break
+          done < <(jq -r '.[] | [.databaseId, .headSha, .createdAt] | @tsv' <<< "$runs")
+
+          if [[ "$found_baseline" != true ]]; then
+            echo "No retained successful main benchmark artifact could be used as a baseline."
           fi
       - name: Run benchmarks
         id: benchmarks
