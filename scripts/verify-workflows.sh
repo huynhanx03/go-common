@@ -123,7 +123,7 @@ grep -Fq '      contents: read' "$workflow_root/ai-review.yml" ||
   fail 'AI CI review must be able to check out the default-branch report helper'
 grep -Fq 'ref: ${{ github.event.repository.default_branch }}' "$workflow_root/ai-review.yml" ||
   fail 'AI CI review may check out only the repository default branch'
-grep -Fq 'gh run download "$RUN_ID" --repo "$REPOSITORY" --name pr-check-summary' "$workflow_root/ai-review.yml" ||
+grep -Fq '"download",' "$root/scripts/pr_summary_artifact.py" ||
   fail 'AI PR review must download the PR summary artifact'
 grep -Fq 'gh run view "$RUN_ID" --repo "$REPOSITORY" --json' "$workflow_root/ai-review.yml" ||
   fail 'AI PR review must fetch run details from GitHub'
@@ -141,6 +141,10 @@ grep -Fq 'p < 0.05' "$workflow_root/ai-review.yml" ||
   fail 'AI prompt must interpret benchmark significance conservatively'
 grep -Fq 'Write the comment in English' "$workflow_root/ai-review.yml" ||
   fail 'AI CI review comments must be written in English'
+grep -Fq 'python3 scripts/pr_summary_artifact.py' "$workflow_root/ai-review.yml" ||
+  fail 'AI CI review must use the tested PR summary artifact downloader'
+grep -Fq 'RETRY_ATTEMPTS = 6' "$root/scripts/pr_summary_artifact.py" ||
+  fail 'PR summary artifact download must retry transient artifact visibility'
 grep -Fq 'If sample counts differ, call that out' "$workflow_root/ai-review.yml" ||
   fail 'AI prompt must disclose unequal benchmark sample counts'
 grep -Fq 'If baseline.artifact_format is legacy, say so' "$workflow_root/ai-review.yml" ||

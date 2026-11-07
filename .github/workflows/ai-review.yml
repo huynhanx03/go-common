@@ -89,14 +89,11 @@ jobs:
             job_report='[]'
           fi
 
-          artifact_size="$(gh api "repos/$REPOSITORY/actions/runs/$RUN_ID/artifacts" \
-            --jq '.artifacts[] | select(.name == "pr-check-summary") | .size_in_bytes' 2>/dev/null | sed -n '1p' || true)"
-          report_file="$report_dir/pr-check-summary.json"
-          if [[ "$artifact_size" =~ ^[0-9]+$ ]] && (( artifact_size <= 100000 )); then
-            gh run download "$RUN_ID" --repo "$REPOSITORY" --name pr-check-summary --dir "$report_dir" 2>/dev/null || true
-          fi
-
-          if [[ -f "$report_file" ]] && (( $(wc -c < "$report_file") <= 100000 )) && jq -e 'type == "object"' "$report_file" > /dev/null 2>&1; then
+          report_file="$RUNNER_TEMP/pr-check-summary.json"
+          if python3 scripts/pr_summary_artifact.py \
+            --repository "$REPOSITORY" \
+            --run-id "$RUN_ID" \
+            --output "$report_file"; then
             cp "$report_file" "$RUNNER_TEMP/pr-check-summary-base.json"
           else
             jq -n \

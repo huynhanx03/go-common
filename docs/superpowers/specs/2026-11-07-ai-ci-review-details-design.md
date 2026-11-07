@@ -31,7 +31,7 @@ The `main` benchmark workflow will upload a `benchmark-baseline` artifact after 
 
 The AI workflow will list failed jobs from the completed CI run and fetch failed-step logs for each job individually. A tested helper will extract bounded excerpts around failure markers per job, preserving the job name and a clear unavailable/no-match status. The workflow checks out only the repository default branch to run this helper and grants `contents: read` for that checkout; it never checks out or executes PR code. If logs cannot be fetched, the AI will report the failed job status and link the Actions run without guessing at a cause. Full logs remain available in GitHub Actions.
 
-The `pr-check-summary` artifact will combine check statuses, detailed coverage, benchmark comparison, and failure diagnostics. The Copilot prompt will direct it to report the most important uncovered packages/functions and statistically supported benchmark changes, then explain failures using only the matching job evidence. If the artifact is missing, the existing fallback remains limited to workflow job statuses.
+The `pr-check-summary` artifact will combine check statuses, detailed coverage, benchmark comparison, and failure diagnostics. The Copilot prompt will direct it to report the most important uncovered packages/functions and statistically supported benchmark changes, then explain failures using only the matching job evidence. The AI workflow retries artifact listing and download for a bounded period to tolerate Actions artifact visibility delays; if the artifact is still unavailable, its fallback remains limited to workflow job statuses.
 
 ## Constraints and risks
 

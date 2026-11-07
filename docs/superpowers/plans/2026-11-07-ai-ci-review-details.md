@@ -85,6 +85,7 @@
 
 - [x] Replace the single combined `--log-failed | tail -c 16000` excerpt with per-failed-job log retrieval and bounded context around failure markers.
 - [x] Preserve a clear fallback when logs are unavailable or contain no recognized failure markers; include job conclusion but do not invent a cause.
+- [x] Retry fetching the compact PR summary for bounded attempts to tolerate artifact visibility delays before falling back to job results.
 - [x] Update the prompt to prioritize weakest packages, zero-covered functions, statistically supported benchmark deltas, and evidence-backed failure causes while noting artifact/environment limitations.
 - [x] Extend workflow checks to guard against a global tail-only log excerpt and require per-job diagnostics without granting Copilot CLI tool access.
 - [x] Run workflow validation and inspect representative passing and multi-failure reports, including a missing summary artifact and unavailable job logs.
