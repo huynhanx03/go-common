@@ -61,6 +61,13 @@ func TestBackoffPoliciesFollowSequencesAndCap(t *testing.T) {
 			t.Fatalf("largest representable delay overflowed: %v", got)
 		}
 	})
+	t.Run("large initial delay below cap", func(t *testing.T) {
+		initial := time.Duration(1 << 53)
+		max := initial + 1
+		if got := NewExponentialBackoff(initial, max, 2).Delay(0); got != initial {
+			t.Fatalf("initial delay = %v, want %v", got, initial)
+		}
+	})
 }
 
 func TestBackoffDefaultsAndJitterStayWithinPolicy(t *testing.T) {

@@ -246,7 +246,7 @@ func TestGeneratedCRUDHTTP(t *testing.T) {
 	updatedData, ok := updatedEnvelope["data"].(map[string]any)
 	if !ok || updatedData["name"] != "after" || updatedData["created_at"] != createdAt ||
 		updatedData["created_by"] != createdBy || updatedData["updated_by"] != "integration-user" {
-		t.Fatalf("update changed fields outside the requested business field: %v", updatedEnvelope["data"])
+		t.Fatalf("update changed fields outside the requested business field: before created_at=%v created_by=%v; after=%v", createdAt, createdBy, updatedEnvelope["data"])
 	}
 	if response := request(http.MethodPatch, "/api/v1/catalog/articles/"+articleID, "{}"); response.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("empty typed update status = %d, body = %s", response.Code, response.Body)

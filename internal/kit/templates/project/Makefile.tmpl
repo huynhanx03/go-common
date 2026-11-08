@@ -28,7 +28,7 @@ migrate-diff:
 	docker compose run --rm --no-deps --entrypoint /app/migrate migrator schema > "$$schema_file"; \
 	chmod 0644 "$$schema_file"; \
 	docker compose --profile tools up --detach --wait postgres-tools; \
-	COMXKIT_SCHEMA_FILE="$$schema_file" docker compose --profile tools run --rm --build atlas migrate diff "$$name" --env diff
+	COMXKIT_SCHEMA_FILE="$$schema_file" docker compose --profile tools run --rm --build --user "$$(id -u):$$(id -g)" atlas migrate diff "$$name" --env diff
 
 migrate:
 	docker compose run --rm --build migrator apply

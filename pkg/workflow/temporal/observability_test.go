@@ -58,9 +58,9 @@ func TestWorkflowActivityObservability(t *testing.T) {
 						if err != nil {
 							t.Errorf("workflow update failed: %v", err)
 						}
+						environment.SignalWorkflow("continue", "resume")
 					},
 				})
-				environment.SignalWorkflow("continue", "resume")
 			}, time.Second)
 			environment.ExecuteWorkflow(observabilityWorkflow)
 			if err := environment.GetWorkflowError(); err != nil {

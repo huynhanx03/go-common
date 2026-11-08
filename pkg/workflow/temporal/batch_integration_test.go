@@ -20,7 +20,6 @@ import (
 	"go.temporal.io/sdk/workflow"
 	"go.uber.org/zap"
 
-	"github.com/huynhanx03/go-common/pkg/coordination"
 	"github.com/huynhanx03/go-common/pkg/logger"
 	"github.com/huynhanx03/go-common/pkg/settings"
 	"github.com/huynhanx03/go-common/pkg/testutil/containers"

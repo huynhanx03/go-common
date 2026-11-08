@@ -14,7 +14,10 @@ import (
 
 func (a *Adapter) TryAcquire(ctx context.Context, request coordination.AcquireRequest) (coordination.Lease, error) {
 	lease, _, err := a.acquire(ctx, request)
-	return lease, err
+	if err != nil {
+		return nil, err
+	}
+	return lease, nil
 }
 
 func (a *Adapter) TryAcquireFenced(ctx context.Context, request coordination.AcquireRequest) (coordination.FencedLease, error) {
