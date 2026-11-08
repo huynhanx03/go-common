@@ -234,7 +234,19 @@ func TestGeneratedCRUDHTTP(t *testing.T) {
 	if !ok || articleID == "" || articleData["name"] != "before" || articleData["created_by"] != "integration-user" {
 		t.Fatalf("created article = %v", articleData)
 	}
-	createdAt, createdBy := articleData["created_at"], articleData["created_by"]
+	persisted := request(http.MethodGet, "/api/v1/catalog/articles/"+articleID, "")
+	if persisted.Code != http.StatusOK {
+		t.Fatalf("get typed article before update status = %d, body = %s", persisted.Code, persisted.Body)
+	}
+	var persistedEnvelope map[string]any
+	if err := json.Unmarshal(persisted.Body.Bytes(), &persistedEnvelope); err != nil {
+		t.Fatal(err)
+	}
+	persistedData, ok := persistedEnvelope["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("get typed article response data = %v", persistedEnvelope["data"])
+	}
+	createdAt, createdBy := persistedData["created_at"], persistedData["created_by"]
 	updated := request(http.MethodPatch, "/api/v1/catalog/articles/"+articleID, "{\"name\":\"after\"}")
 	if updated.Code != http.StatusOK {
 		t.Fatalf("update typed article status = %d, body = %s", updated.Code, updated.Body)

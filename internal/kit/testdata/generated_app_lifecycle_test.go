@@ -70,14 +70,23 @@ func TestGeneratedAppShutdownDrainsRequests(t *testing.T) {
 			requestDone <- err
 			return
 		}
-		response, err := (&http.Client{Timeout: 5 * time.Second}).Do(request)
+		client := &http.Client{
+			Transport: &http.Transport{DisableKeepAlives: true},
+			Timeout:   5 * time.Second,
+		}
+		response, err := client.Do(request)
 		if err != nil {
 			requestDone <- err
 			return
 		}
-		defer response.Body.Close()
-		if response.StatusCode != http.StatusNoContent {
+		status := response.StatusCode
+		closeErr := response.Body.Close()
+		if status != http.StatusNoContent {
 			requestDone <- errors.New("drain route returned an unexpected status")
+			return
+		}
+		if closeErr != nil {
+			requestDone <- closeErr
 			return
 		}
 		requestDone <- nil
