@@ -13,15 +13,16 @@ dependency-check:
 workflow-check:
 	go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
 	./scripts/verify-workflows.sh
+	./scripts/test-coverage-report.sh
 
 test-unit:
-	go test ./...
+	go test -count=1 ./...
 
 test-race:
-	go test -race ./...
+	go test -race -count=1 ./...
 
 test-integration:
-	go test -tags=integration ./...
+	go test -tags=integration -count=1 ./...
 
 fuzz-seeds:
 	go test ./pkg/cdc ./pkg/common/http/request ./pkg/common/websocket ./pkg/mq/forge -run '^Fuzz' -count=1
@@ -30,6 +31,6 @@ coverage:
 	./scripts/verify-coverage.sh
 
 benchmarks:
-	go test -tags=benchmark -run=^$$ -bench=. -benchmem -count=5 ./...
+	go test -tags=benchmark -run=^$$ -bench=. -benchmem -benchtime=500ms -count=20 ./...
 
 verify: format-check vet dependency-check workflow-check test-unit fuzz-seeds

@@ -18,8 +18,10 @@ jobs:
   unit:
     name: Unit tests and coverage
     outputs:
-      coverage: ${{ steps.coverage.outputs.total }}
-      minimum_coverage: ${{ steps.coverage.outputs.minimum }}
+      coverage: ${{ steps.report.outputs.total }}
+      minimum_coverage: ${{ steps.report.outputs.minimum }}
+      report: ${{ steps.report.outputs.report }}
+      coverage_metadata: ${{ steps.coverage_metadata.outputs.metadata }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -33,9 +35,68 @@ jobs:
       - run: go mod download
       - name: Test with coverage threshold
         id: coverage
+        continue-on-error: true
         env:
           COVER_PROFILE: coverage.out
+          COVERAGE_REPORT_FILE: ${{ runner.temp }}/unit-report.json
+          COVERAGE_DETAIL_REPORT_FILE: ${{ runner.temp }}/coverage-report.json
         run: ./scripts/verify-coverage.sh
+      - name: Export unit report
+        id: report
+        if: always()
+        run: |
+          report_file="$RUNNER_TEMP/unit-report.json"
+          if [[ -s "$report_file" ]] && jq -e 'type == "object"' "$report_file" > /dev/null; then
+            report="$(jq -c . "$report_file")"
+            total="$(jq -r '.coverage.total_percent // ""' "$report_file")"
+            minimum="$(jq -r '.coverage.minimum_percent // ""' "$report_file")"
+          else
+            report='{"tests":{"status":"unavailable"},"coverage":{"total_percent":null,"minimum_percent":null,"threshold_met":false,"packages":[],"low_coverage_functions":[]}}'
+            total=""
+            minimum=""
+          fi
+          {
+            echo "report=$report"
+            echo "total=$total"
+            echo "minimum=$minimum"
+          } >> "$GITHUB_OUTPUT"
+      - name: Write candidate coverage metadata
+        id: coverage_metadata
+        if: always()
+        env:
+          COVERAGE_REPORT: ${{ runner.temp }}/coverage-report.json
+          COVERAGE_ARTIFACT_DIR: ${{ runner.temp }}/coverage-candidate
+          CANDIDATE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          mkdir -p "$COVERAGE_ARTIFACT_DIR"
+          if [[ -s "$COVERAGE_REPORT" ]] && jq -e 'type == "object" and has("packages")' "$COVERAGE_REPORT" > /dev/null 2>&1; then
+            cp "$COVERAGE_REPORT" "$COVERAGE_ARTIFACT_DIR/coverage-report.json"
+          fi
+          jq -n \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg commit "$CANDIDATE_COMMIT" \
+            --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg go_version "$(go env GOVERSION)" \
+            --arg os "$(go env GOOS)" \
+            --arg arch "$(go env GOARCH)" \
+            --arg command "go test -short -count=1 -covermode=atomic -coverprofile=coverage.out ./..." \
+            '{format_version: 1, run_id: $run_id, commit: $commit, created_at: $created_at, go_version: $go_version, os: $os, arch: $arch, command: $command}' \
+            > "$COVERAGE_ARTIFACT_DIR/metadata.json"
+          metadata="$(jq -c . "$COVERAGE_ARTIFACT_DIR/metadata.json")"
+          echo "metadata=$metadata" >> "$GITHUB_OUTPUT"
+      - name: Require unit tests and coverage to pass
+        if: always()
+        env:
+          COVERAGE_RESULT: ${{ steps.coverage.outcome }}
+        run: test "$COVERAGE_RESULT" = success
+      - name: Upload detailed coverage report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-report
+          path: ${{ runner.temp }}/coverage-candidate/
+          if-no-files-found: ignore
+          retention-days: 1
 
   race:
     name: Race tests
@@ -84,10 +145,11 @@ jobs:
 
   benchmark:
     name: Benchmarks
-    outputs:
-      report: ${{ steps.benchmarks.outputs.report }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -97,23 +159,146 @@ jobs:
           go-version-file: go.mod
           cache: true
       - run: go mod download
+      - name: Download latest successful main benchmark baseline
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          baseline_dir="$RUNNER_TEMP/benchmark-baseline"
+          mkdir -p "$baseline_dir"
+          runs="$(gh run list --repo "$REPOSITORY" --workflow main.yml --branch main --status success --limit 100 --json databaseId,headSha,createdAt 2>/dev/null || printf '[]')"
+          found_baseline=false
+          while IFS=$'\t' read -r run_id head_sha created_at; do
+            if [[ ! "$run_id" =~ ^[0-9]+$ || ! "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              continue
+            fi
+
+            rm -rf "$baseline_dir"
+            mkdir -p "$baseline_dir"
+            if gh run download "$run_id" --repo "$REPOSITORY" --name benchmark-baseline --dir "$baseline_dir" > "$RUNNER_TEMP/benchmark-baseline-download.log" 2>&1 && \
+              [[ -s "$baseline_dir/benchmark.txt" ]] && jq -e 'type == "object"' "$baseline_dir/metadata.json" > /dev/null 2>&1; then
+              echo "Using benchmark-baseline artifact from main run $run_id."
+              found_baseline=true
+              break
+            fi
+
+            rm -rf "$baseline_dir"
+            mkdir -p "$baseline_dir"
+            legacy_artifact="go-common-benchmark-$head_sha"
+            if ! gh run download "$run_id" --repo "$REPOSITORY" --name "$legacy_artifact" --dir "$baseline_dir" > "$RUNNER_TEMP/benchmark-baseline-download.log" 2>&1 || \
+              [[ ! -s "$baseline_dir/benchmark.txt" ]]; then
+              continue
+            fi
+
+            go_mod_content=""
+            makefile_content=""
+            if ! go_mod_content="$(gh api "repos/$REPOSITORY/contents/go.mod?ref=$head_sha" --jq .content 2>/dev/null | base64 --decode 2>/dev/null)"; then
+              go_mod_content=""
+            fi
+            if ! makefile_content="$(gh api "repos/$REPOSITORY/contents/Makefile?ref=$head_sha" --jq .content 2>/dev/null | base64 --decode 2>/dev/null)"; then
+              makefile_content=""
+            fi
+            baseline_go_version="$(sed -nE 's/^go[[:space:]]+([^[:space:]]+).*/go\1/p' <<< "$go_mod_content" | head -n 1)"
+            baseline_benchmark_count="$(awk '
+              $0 == "benchmarks:" { in_benchmarks = 1; next }
+              in_benchmarks && /^[^[:space:]]/ { exit }
+              in_benchmarks && /-count=[0-9]+/ {
+                line = $0
+                sub(/^.*-count=/, "", line)
+                sub(/[^0-9].*$/, "", line)
+                print line
+                exit
+              }
+            ' <<< "$makefile_content")"
+            if [[ -z "$baseline_go_version" || -z "$baseline_benchmark_count" ]]; then
+              rm -rf "$baseline_dir"
+              mkdir -p "$baseline_dir"
+              continue
+            fi
+
+            jq -n \
+              --arg run_id "$run_id" \
+              --arg commit "$head_sha" \
+              --arg created_at "$created_at" \
+              --arg go_version "$baseline_go_version" \
+              --arg command "make benchmarks" \
+              --argjson benchmark_count "$baseline_benchmark_count" \
+              '{format_version: 1, artifact_format: "legacy", run_id: $run_id, commit: $commit, created_at: $created_at, go_version: $go_version, os: "linux", arch: "amd64", command: $command, benchmark_count: $benchmark_count}' \
+              > "$baseline_dir/metadata.json"
+            echo "Using legacy benchmark artifact from main run $run_id ($baseline_benchmark_count samples)."
+            found_baseline=true
+            break
+          done < <(jq -r '.[] | [.databaseId, .headSha, .createdAt] | @tsv' <<< "$runs")
+
+          if [[ "$found_baseline" != true ]]; then
+            echo "No retained successful main benchmark artifact could be used as a baseline."
+          fi
       - name: Run benchmarks
         id: benchmarks
+        env:
+          BENCHMARK_FILE: ${{ runner.temp }}/benchmark.txt
         run: |
-          log_file="$RUNNER_TEMP/go-benchmarks.log"
           set +e
-          make benchmarks > "$log_file" 2>&1
+          make benchmarks > "$BENCHMARK_FILE" 2>&1
           result=$?
           set -e
-          cat "$log_file"
-
-          delimiter="BENCHMARKS_$(openssl rand -hex 16)"
-          {
-            echo "report<<$delimiter"
-            grep -E '^(Benchmark|ok[[:space:]]|FAIL)' "$log_file" || true
-            echo "$delimiter"
-          } >> "$GITHUB_OUTPUT"
+          cat "$BENCHMARK_FILE"
           exit "$result"
+      - name: Write candidate benchmark metadata
+        if: steps.benchmarks.outcome == 'success'
+        env:
+          METADATA_FILE: ${{ runner.temp }}/benchmark-metadata.json
+          CANDIDATE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          jq -n \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg commit "$CANDIDATE_COMMIT" \
+            --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg go_version "$(go env GOVERSION)" \
+            --arg os "$(go env GOOS)" \
+            --arg arch "$(go env GOARCH)" \
+            --arg command "make benchmarks" \
+            --argjson benchmark_count 20 \
+            '{format_version: 1, run_id: $run_id, commit: $commit, created_at: $created_at, go_version: $go_version, os: $os, arch: $arch, command: $command, benchmark_count: $benchmark_count}' \
+            > "$METADATA_FILE"
+      - name: Build benchmark comparison report
+        if: always()
+        env:
+          BENCHMARK_RESULT: ${{ steps.benchmarks.outcome }}
+          CANDIDATE_FILE: ${{ runner.temp }}/benchmark.txt
+          CANDIDATE_METADATA: ${{ runner.temp }}/benchmark-metadata.json
+          BASELINE_DIR: ${{ runner.temp }}/benchmark-baseline
+          REPORT_DIR: ${{ runner.temp }}/benchmark-comparison
+        run: |
+          mkdir -p "$REPORT_DIR"
+          if [[ -s "$CANDIDATE_FILE" ]]; then
+            cp "$CANDIDATE_FILE" "$REPORT_DIR/benchmark.txt"
+          fi
+          if [[ -s "$CANDIDATE_METADATA" ]]; then
+            cp "$CANDIDATE_METADATA" "$REPORT_DIR/metadata.json"
+          fi
+
+          if [[ "$BENCHMARK_RESULT" == success && -s "$BASELINE_DIR/benchmark.txt" && -s "$BASELINE_DIR/metadata.json" ]]; then
+            mkdir -p "$RUNNER_TEMP/bin"
+            if ! env -u GOFLAGS GOBIN="$RUNNER_TEMP/bin" go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260709024250-82a0b07e230d; then
+              echo "Could not install the pinned benchstat tool; comparison will be unavailable."
+            fi
+          fi
+          python3 scripts/benchmark_report.py \
+            --candidate "$REPORT_DIR/benchmark.txt" \
+            --candidate-metadata "$REPORT_DIR/metadata.json" \
+            --baseline-dir "$BASELINE_DIR" \
+            --benchstat "$RUNNER_TEMP/bin/benchstat" \
+            --output "$REPORT_DIR/benchmark-report.json"
+      - name: Upload benchmark comparison report
+        if: ${{ always() && github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: benchmark-comparison
+          path: ${{ runner.temp }}/benchmark-comparison/
+          if-no-files-found: ignore
+          retention-days: 1
 
   test-overview:
     name: Test Overview
@@ -169,6 +354,8 @@ jobs:
           go mod tidy -diff
       - name: Validate workflows
         run: make workflow-check
+      - name: Test CI report helpers
+        run: python3 -m unittest discover -s scripts -p 'test_*report.py'
       - name: Verify formatting
         run: make format-check
       - name: Vet
@@ -241,6 +428,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Download detailed coverage report
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: coverage-report
+          path: ${{ runner.temp }}/coverage-report
+      - name: Download benchmark comparison report
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: benchmark-comparison
+          path: ${{ runner.temp }}/benchmark-comparison
       - name: Build CI report
         env:
           UNIT_RESULT: ${{ needs.unit.result }}
@@ -252,12 +453,22 @@ jobs:
           QUALITY_RESULT: ${{ needs.quality.result }}
           SECURITY_RESULT: ${{ needs.security.result }}
           GATE_RESULT: ${{ needs.gate.result }}
-          UNIT_COVERAGE: ${{ needs.unit.outputs.coverage }}
-          MINIMUM_COVERAGE: ${{ needs.unit.outputs.minimum_coverage }}
-          BENCHMARK_REPORT: ${{ needs.benchmark.outputs.report }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          UNIT_REPORT: ${{ needs.unit.outputs.report }}
+          COVERAGE_METADATA: ${{ needs.unit.outputs.coverage_metadata }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COVERAGE_REPORT_FILE: ${{ runner.temp }}/coverage-report/coverage-report.json
+          BENCHMARK_REPORT_FILE: ${{ runner.temp }}/benchmark-comparison/benchmark-report.json
         run: |
-          jq -n \
+          if [[ ! -s "$COVERAGE_REPORT_FILE" ]] || ! jq -e 'type == "object" and has("packages")' "$COVERAGE_REPORT_FILE" > /dev/null 2>&1; then
+            printf '%s\n' '{"status":"unavailable","reason":"coverage report artifact is missing or invalid"}' > "$RUNNER_TEMP/coverage-report-fallback.json"
+            COVERAGE_REPORT_FILE="$RUNNER_TEMP/coverage-report-fallback.json"
+          fi
+          if [[ ! -s "$BENCHMARK_REPORT_FILE" ]] || ! jq -e 'type == "object" and has("status")' "$BENCHMARK_REPORT_FILE" > /dev/null 2>&1; then
+            printf '%s\n' '{"status":"unavailable","reason":"benchmark comparison report artifact is missing or invalid","comparison":null}' > "$RUNNER_TEMP/benchmark-report-fallback.json"
+            BENCHMARK_REPORT_FILE="$RUNNER_TEMP/benchmark-report-fallback.json"
+          fi
+          jq --slurpfile detailed_coverage "$COVERAGE_REPORT_FILE" --slurpfile benchmark "$BENCHMARK_REPORT_FILE" -n \
             --arg unit "$UNIT_RESULT" \
             --arg race "$RACE_RESULT" \
             --arg fuzz "$FUZZ_RESULT" \
@@ -267,11 +478,11 @@ jobs:
             --arg quality "$QUALITY_RESULT" \
             --arg security "$SECURITY_RESULT" \
             --arg gate "$GATE_RESULT" \
-            --arg coverage "$UNIT_COVERAGE" \
-            --arg minimum_coverage "$MINIMUM_COVERAGE" \
-            --arg benchmark_report "$BENCHMARK_REPORT" \
+            --arg head_sha "$HEAD_SHA" \
+            --argjson unit_report "${UNIT_REPORT:-null}" \
+            --argjson coverage_metadata "${COVERAGE_METADATA:-null}" \
             --arg run_url "$RUN_URL" \
-            '{checks: {unit: $unit, race: $race, fuzz_seeds: $fuzz, integration: $integration, benchmarks: $benchmark, test_overview: $overview, quality: $quality, security: $security, required_gate: $gate}, coverage: {total_percent: $coverage, minimum_percent: $minimum_coverage}, benchmark_output: $benchmark_report, workflow_run: $run_url}' \
+            '{head_sha: $head_sha, coverage_metadata: $coverage_metadata, checks: {unit: $unit, race: $race, fuzz_seeds: $fuzz, integration: $integration, benchmarks: $benchmark, test_overview: $overview, quality: $quality, security: $security, required_gate: $gate}, tests: $unit_report.tests, coverage: ($unit_report.coverage + {status: ($detailed_coverage[0].status // "unavailable"), total_percent: ($detailed_coverage[0].total_percent // $unit_report.coverage.total_percent), minimum_percent: ($detailed_coverage[0].minimum_percent // $unit_report.coverage.minimum_percent), threshold_met: $unit_report.coverage.threshold_met, test_packages: $unit_report.coverage.packages, packages: (if $detailed_coverage[0].status == "available" then $detailed_coverage[0].packages else $unit_report.coverage.packages end), zero_covered_functions_total: (($detailed_coverage[0].zero_covered_functions // []) | length), zero_covered_functions: (($detailed_coverage[0].zero_covered_functions // [])[:100]), zero_covered_functions_omitted: ([((($detailed_coverage[0].zero_covered_functions // []) | length) - 100), 0] | max)}), benchmark: $benchmark[0], workflow_run: $run_url}' \
             > "$RUNNER_TEMP/pr-check-summary.json"
 
       - name: Upload PR check summary
