@@ -6,7 +6,13 @@ import (
 	"log/slog"
 	"sync"
 	"testing"
+
+	"github.com/huynhanx03/go-common/pkg/common/apperr"
 )
+
+type generatedNotFoundError struct{}
+
+func (generatedNotFoundError) Error() string { return "generated record missing" }
 
 func TestMapEntErrorDoesNotLogAtMappingBoundary(t *testing.T) {
 	var logs bytes.Buffer
@@ -67,4 +73,58 @@ func TestErrorPredicateRegistrationIsConcurrentSafe(t *testing.T) {
 	}
 	close(start)
 	wait.Wait()
+}
+
+func TestMapEntErrorUsesBusinessClassification(t *testing.T) {
+	tests := []struct {
+		name  string
+		err   error
+		want  int
+		isNil bool
+	}{
+		{name: "nil", isNil: true},
+		{name: "not found", err: &NotFoundError{label: "account"}, want: apperr.CodeNotFound},
+		{name: "validation", err: &ValidationError{err: errors.New("invalid field")}, want: apperr.CodeValidationFailed},
+		{name: "unique constraint", err: &ConstraintError{msg: "unique index"}, want: apperr.CodeConflict},
+		{name: "invalid foreign key", err: &ConstraintError{msg: "foreign key create failed"}, want: apperr.CodeBadRequest},
+		{name: "referenced row mutation", err: &ConstraintError{msg: "foreign key update failed"}, want: apperr.CodeConflict},
+		{name: "deadlock", err: &ConstraintError{msg: "deadlock detected"}, want: apperr.CodeDatabaseError},
+		{name: "other constraint", err: &ConstraintError{msg: "check violation"}, want: apperr.CodeConflict},
+		{name: "unloaded edge", err: &NotLoadedError{edge: "owner"}, want: apperr.CodeInternalServer},
+		{name: "non singular result", err: &NotSingularError{label: "account"}, want: apperr.CodeBadRequest},
+		{name: "unknown database failure", err: errors.New("driver failed"), want: apperr.CodeDatabaseError},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mapped := MapEntError(test.err, "account")
+			if test.isNil {
+				if mapped != nil {
+					t.Fatalf("MapEntError(nil) = %+v", mapped)
+				}
+				return
+			}
+			if mapped == nil || mapped.Code != test.want {
+				t.Fatalf("mapped error = %+v; want code %d", mapped, test.want)
+			}
+			if !errors.Is(mapped, test.err) {
+				t.Fatal("mapped error did not preserve the database cause")
+			}
+		})
+	}
+}
+
+func TestMapEntErrorRecognizesGeneratedEntErrors(t *testing.T) {
+	RegisterErrorPredicates(ErrorPredicates{
+		IsNotFound: func(err error) bool {
+			_, ok := err.(generatedNotFoundError)
+			return ok
+		},
+	})
+
+	cause := generatedNotFoundError{}
+	mapped := MapEntError(cause, "account")
+	if mapped == nil || mapped.Code != apperr.CodeNotFound || !errors.Is(mapped, cause) {
+		t.Fatalf("generated not-found mapping = %+v", mapped)
+	}
 }
