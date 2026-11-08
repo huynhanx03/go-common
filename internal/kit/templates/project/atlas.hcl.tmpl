@@ -1,0 +1,16 @@
+env "local" {
+  url = getenv("DATABASE_URL")
+
+  migration {
+    dir = "file://migrations"
+  }
+}
+
+env "diff" {
+  src = "file://schema.sql"
+  dev = getenv("MIGRATION_DATABASE_URL")
+
+  migration {
+    dir = "file://migrations"
+  }
+}

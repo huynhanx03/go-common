@@ -1,0 +1,72 @@
+package app
+
+import (
+	"fmt"
+	"os"
+	"strconv"
+
+	commonent "github.com/huynhanx03/go-common/pkg/database/ent"
+	"github.com/huynhanx03/go-common/pkg/logger"
+	"github.com/huynhanx03/go-common/pkg/settings"
+)
+
+const (
+	defaultHTTPAddress = ":8080"
+	defaultDatabaseHost = "localhost"
+	defaultDatabasePort = 5432
+	defaultDatabaseName = "go_common"
+	defaultDatabaseUser = "postgres"
+	defaultDatabasePassword = "postgres"
+	defaultMaxOpenConnections = 20
+	defaultMaxIdleConnections = 5
+)
+
+type Config struct {
+	Address  string
+	Logger   logger.LoggerConfig
+	Database settings.Database
+}
+
+func LoadConfig() (Config, error) {
+	mode := settings.Env(envOr("APP_ENV", string(settings.EnvDev)))
+	port, err := intEnv("DATABASE_PORT", defaultDatabasePort)
+	if err != nil {
+		return Config{}, err
+	}
+	password := os.Getenv("DATABASE_PASSWORD")
+	if password == "" {
+		if mode != settings.EnvDev {
+			return Config{}, fmt.Errorf("DATABASE_PASSWORD is required outside development")
+		}
+		password = defaultDatabasePassword
+	}
+	return Config{
+		Address: envOr("HTTP_ADDRESS", defaultHTTPAddress),
+		Logger: logger.LoggerConfig{Mode: mode, Env: mode, Service: {{.ServiceName}}},
+		Database: settings.Database{
+			Driver: commonent.DriverPostgres, Host: envOr("DATABASE_HOST", defaultDatabaseHost), Port: port,
+			Username: envOr("DATABASE_USER", defaultDatabaseUser), Password: password,
+			Database: envOr("DATABASE_NAME", defaultDatabaseName),
+			MaxOpenConns: defaultMaxOpenConnections, MaxIdleConns: defaultMaxIdleConnections,
+		},
+	}, nil
+}
+
+func envOr(key, fallback string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func intEnv(key string, fallback int) (int, error) {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		return 0, fmt.Errorf("%s must be a positive integer", key)
+	}
+	return parsed, nil
+}

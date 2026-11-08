@@ -1,0 +1,76 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"os/signal"
+	"strings"
+	"syscall"
+)
+
+func main() {
+	if err := run(); err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if len(os.Args) > 2 {
+		return errors.New("usage: migrate [schema|apply]")
+	}
+	command := "apply"
+	if len(os.Args) == 2 {
+		command = os.Args[1]
+	}
+	switch command {
+	case "schema":
+		schema, err := desiredSchema(ctx)
+		if err != nil {
+			return err
+		}
+		_, err = io.WriteString(os.Stdout, schema)
+		return err
+	case "apply":
+		return apply(ctx, "migrations")
+	default:
+		return fmt.Errorf("unknown migration command %q", os.Args[1])
+	}
+}
+
+func apply(ctx context.Context, directory string) error {
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return fmt.Errorf("read checked-in migrations: %w", err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".sql") {
+			return runAtlas(ctx)
+		}
+	}
+	return nil
+}
+
+func runAtlas(ctx context.Context) error {
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		return errors.New("DATABASE_URL is required to apply migrations")
+	}
+	atlas := os.Getenv("ATLAS_BIN")
+	if atlas == "" {
+		atlas = "atlas"
+	}
+	command := exec.CommandContext(ctx, atlas, "migrate", "apply", "--env", "local")
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("apply checked-in migrations: %w", err)
+	}
+	return nil
+}

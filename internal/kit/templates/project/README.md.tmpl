@@ -1,0 +1,20 @@
+# {{.ProjectName}}
+
+Go service using Gin, Ent and PostgreSQL, built on go-common.
+
+## Run locally
+
+Run `make setup`, then `make run-local`. The setup command creates `.env` only when it is missing, resolves the Go module, and generates Ent code when schemas exist. `make stop` stops the containers and keeps the database volume.
+
+The Compose stack starts PostgreSQL, applies checked-in migrations, then starts the API. The server exposes `GET /live` for liveness and `GET /ready` for database readiness. Schema changes are created explicitly with `make migrate-diff name=init`, reviewed as SQL, and applied with `make migrate` or the next `make run-local`.
+
+`make migrate-diff` uses the separate PostgreSQL database in the `tools` Compose profile. It does not change the application database. The Atlas Community CLI is pinned in the generated Dockerfile and does not need to be installed on the host.
+
+The default schema has UUIDv7 IDs and timestamps but no business fields. Add fields, validation and persistence mappings in each resource's `ent/schema`, `request.go`, `service.go` and `repository.go`. The scaffold does not add authentication, authorization, tenant isolation, seed data or business rules.
+
+## Project layout
+
+- `cmd/server` starts and shuts down the application.
+- `cmd/migrate` inspects or applies checked-in migrations.
+- `internal/app` wires configuration, HTTP, health checks and lifecycle.
+- `ent/schema` contains Ent schemas; `internal` contains application domains.

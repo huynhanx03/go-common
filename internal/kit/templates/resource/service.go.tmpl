@@ -1,0 +1,367 @@
+package {{.Name}}
+
+import (
+	"context"
+{{if or .Find .GetBulk .CreateBulk .UpdateBulk .UpsertBulk .DeleteBulk}}
+	"fmt"
+{{end}}
+{{if or .Find .Update .Upsert .GetBulk .CreateBulk .UpdateBulk .UpsertBulk .DeleteBulk}}
+	"github.com/huynhanx03/go-common/pkg/common/apperr"
+{{end}}
+{{if or .Find .Get .Create .Update .Upsert .Delete .GetBulk .CreateBulk .UpdateBulk .UpsertBulk .DeleteBulk}}
+	commonent "github.com/huynhanx03/go-common/pkg/database/ent"
+	genent "{{.Module}}/ent"
+{{end}}
+{{if or .Find}}
+	"github.com/huynhanx03/go-common/pkg/dto"
+{{end}}
+{{if or .Get .Update .Upsert .Delete .GetBulk .CreateBulk .UpdateBulk .UpsertBulk .DeleteBulk}}
+	"github.com/google/uuid"
+{{end}}
+)
+
+type resourceRepository interface {
+{{if .Find}}
+	Find(context.Context, *dto.QueryOptions) ([]*genent.{{.TypeName}}, int, error)
+{{end}}
+{{if .Get}}
+	Get(context.Context, uuid.UUID) (*genent.{{.TypeName}}, error)
+{{end}}
+{{if .Create}}
+	Create(context.Context, CreateInput) (*genent.{{.TypeName}}, error)
+{{end}}
+{{if .Update}}
+	Update(context.Context, uuid.UUID, UpdateInput) (*genent.{{.TypeName}}, error)
+{{end}}
+{{if .Upsert}}
+	Upsert(context.Context, uuid.UUID) (*genent.{{.TypeName}}, error)
+{{end}}
+{{if .Delete}}
+	Delete(context.Context, uuid.UUID) error
+{{end}}
+{{if .GetBulk}}
+	GetBulk(context.Context, []uuid.UUID) ([]*genent.{{.TypeName}}, error)
+{{end}}
+{{if .CreateBulk}}
+	CreateBulk(context.Context, []CreateInput) ([]*genent.{{.TypeName}}, error)
+{{end}}
+{{if .UpdateBulk}}
+	UpdateBulk(context.Context, []UpdateItem) ([]*genent.{{.TypeName}}, error)
+{{end}}
+{{if .UpsertBulk}}
+	UpsertBulk(context.Context, []UpsertInput) ([]*genent.{{.TypeName}}, error)
+{{end}}
+{{if .DeleteBulk}}
+	DeleteBulk(context.Context, []uuid.UUID) error
+{{end}}
+}
+
+type Service struct {
+	repository resourceRepository
+{{if or .GetBulk .CreateBulk .UpdateBulk .UpsertBulk .DeleteBulk}}
+	config     ServiceConfig
+{{end}}
+}
+
+{{if or .GetBulk .CreateBulk .UpdateBulk .UpsertBulk .DeleteBulk}}
+type ServiceConfig struct {
+	MaxBulkSize int
+}
+{{end}}
+
+{{if .Find}}
+const maxPageSize = 100
+
+var allowedFindFields = map[string]struct{}{
+{{range .FindFields}}
+	"{{.}}": {},
+{{end}}
+}
+
+var findFieldNames = []string{
+{{range .FindFields}}
+	"{{.}}",
+{{end}}
+}
+{{end}}
+
+{{if or .GetBulk .CreateBulk .UpdateBulk .UpsertBulk .DeleteBulk}}
+const defaultMaxBulkSize = 100
+{{end}}
+
+{{if or .GetBulk .CreateBulk .UpdateBulk .UpsertBulk .DeleteBulk}}
+func NewService(repository resourceRepository, config ServiceConfig) *Service {
+	if config.MaxBulkSize <= 0 {
+		config.MaxBulkSize = defaultMaxBulkSize
+	}
+	return &Service{repository: repository, config: config}
+}
+{{else}}
+func NewService(repository resourceRepository) *Service {
+	return &Service{repository: repository}
+}
+{{end}}
+
+{{if .Find}}
+func (service *Service) Find(ctx context.Context, input FindInput) (*dto.Paginated[Model], error) {
+	pagination := dto.PaginationOptions{}
+	if input.Pagination != nil {
+		pagination.Page = input.Pagination.Page
+		pagination.PageSize = input.Pagination.PageSize
+	}
+	if pagination.Page < 0 || pagination.PageSize < 0 {
+		return nil, invalidInput("page and page_size must be positive")
+	}
+	pagination.SetDefaults()
+	if pagination.PageSize > maxPageSize {
+		return nil, invalidInput(fmt.Sprintf("page_size must not exceed %d", maxPageSize))
+	}
+	if _, err := pagination.Offset(); err != nil {
+		return nil, invalidInput("invalid pagination")
+	}
+	for _, filter := range input.Filters {
+		if _, ok := allowedFindFields[filter.Key]; !ok {
+			return nil, invalidInput(fmt.Sprintf("filter field %q is not supported", filter.Key))
+		}
+	}
+	sorts := append([]dto.SortOption(nil), input.Sort...)
+	hasIDSort := false
+	for _, sort := range sorts {
+		if _, ok := allowedFindFields[sort.Key]; !ok {
+			return nil, invalidInput(fmt.Sprintf("sort field %q is not supported", sort.Key))
+		}
+		if sort.Order != -1 && sort.Order != 1 {
+			return nil, invalidInput("sort order must be 1 or -1")
+		}
+		hasIDSort = hasIDSort || sort.Key == "id"
+	}
+	if !hasIDSort {
+		sorts = append(sorts, dto.SortOption{Key: "id", Order: -1})
+	}
+	options := &dto.QueryOptions{Pagination: &pagination, Filters: input.Filters, Sort: sorts}
+	rows, count, err := service.repository.Find(ctx, options)
+	if err != nil {
+		return nil, commonent.MapEntError(err, "{{.Name}}")
+	}
+	metadata, err := dto.CalculatePaginationChecked(pagination.Page, pagination.PageSize, int64(count))
+	if err != nil {
+		return nil, invalidInput("invalid pagination result")
+	}
+	records := make([]Model, len(rows))
+	for index, row := range rows {
+		records[index] = modelFromEntity(row)
+	}
+	return &dto.Paginated[Model]{Records: &records, Pagination: metadata}, nil
+}
+{{end}}
+
+{{if .Get}}
+func (service *Service) Get(ctx context.Context, id uuid.UUID) (Model, error) {
+	row, err := service.repository.Get(ctx, id)
+	if err != nil {
+		return Model{}, commonent.MapEntError(err, "{{.Name}}")
+	}
+	return modelFromEntity(row), nil
+}
+{{end}}
+
+{{if .Create}}
+func (service *Service) Create(ctx context.Context, input CreateInput) (Model, error) {
+	if err := validateCreate(input); err != nil {
+		return Model{}, err
+	}
+	row, err := service.repository.Create(ctx, input)
+	if err != nil {
+		return Model{}, commonent.MapEntError(err, "{{.Name}}")
+	}
+	return modelFromEntity(row), nil
+}
+{{end}}
+
+{{if .Update}}
+func (service *Service) Update(ctx context.Context, id uuid.UUID, input UpdateInput) (Model, error) {
+	if err := validateUpdate(input); err != nil {
+		return Model{}, err
+	}
+	row, err := service.repository.Update(ctx, id, input)
+	if err != nil {
+		return Model{}, commonent.MapEntError(err, "{{.Name}}")
+	}
+	return modelFromEntity(row), nil
+}
+{{end}}
+
+{{if .Upsert}}
+func (service *Service) Upsert(ctx context.Context, input UpsertInput) (Model, error) {
+	if input.ID == uuid.Nil {
+		return Model{}, invalidInput("id is required")
+	}
+	row, err := service.repository.Upsert(ctx, input.ID)
+	if err != nil {
+		return Model{}, commonent.MapEntError(err, "{{.Name}}")
+	}
+	return modelFromEntity(row), nil
+}
+{{end}}
+
+{{if .Delete}}
+func (service *Service) Delete(ctx context.Context, id uuid.UUID) error {
+	if err := service.repository.Delete(ctx, id); err != nil {
+		return commonent.MapEntError(err, "{{.Name}}")
+	}
+	return nil
+}
+{{end}}
+
+{{if .GetBulk}}
+func (service *Service) GetBulk(ctx context.Context, ids []uuid.UUID) ([]Model, error) {
+	if err := validateBulkIDs(ids, service.config.MaxBulkSize); err != nil {
+		return nil, err
+	}
+	rows, err := service.repository.GetBulk(ctx, ids)
+	if err != nil {
+		return nil, commonent.MapEntError(err, "{{.Name}}")
+	}
+	return modelsFromEntities(rows), nil
+}
+{{end}}
+
+{{if .CreateBulk}}
+func (service *Service) CreateBulk(ctx context.Context, items []CreateInput) ([]Model, error) {
+	if err := validateBulkSize(len(items), service.config.MaxBulkSize); err != nil {
+		return nil, err
+	}
+	for _, item := range items {
+		if err := validateCreate(item); err != nil {
+			return nil, err
+		}
+	}
+	rows, err := service.repository.CreateBulk(ctx, items)
+	if err != nil {
+		return nil, commonent.MapEntError(err, "{{.Name}}")
+	}
+	return modelsFromEntities(rows), nil
+}
+{{end}}
+
+{{if .UpdateBulk}}
+func (service *Service) UpdateBulk(ctx context.Context, items []UpdateItem) ([]Model, error) {
+	if err := validateBulkSize(len(items), service.config.MaxBulkSize); err != nil {
+		return nil, err
+	}
+	ids := make([]uuid.UUID, len(items))
+	for index, item := range items {
+		ids[index] = item.ID
+		if err := validateUpdate(item.Changes); err != nil {
+			return nil, err
+		}
+	}
+	if err := validateUniqueIDs(ids); err != nil {
+		return nil, err
+	}
+	rows, err := service.repository.UpdateBulk(ctx, items)
+	if err != nil {
+		return nil, commonent.MapEntError(err, "{{.Name}}")
+	}
+	return modelsFromEntities(rows), nil
+}
+{{end}}
+
+{{if .UpsertBulk}}
+func (service *Service) UpsertBulk(ctx context.Context, items []UpsertInput) ([]Model, error) {
+	if err := validateBulkSize(len(items), service.config.MaxBulkSize); err != nil {
+		return nil, err
+	}
+	ids := make([]uuid.UUID, len(items))
+	for index, item := range items {
+		ids[index] = item.ID
+	}
+	if err := validateUniqueIDs(ids); err != nil {
+		return nil, err
+	}
+	rows, err := service.repository.UpsertBulk(ctx, items)
+	if err != nil {
+		return nil, commonent.MapEntError(err, "{{.Name}}")
+	}
+	return modelsFromEntities(rows), nil
+}
+{{end}}
+
+{{if .DeleteBulk}}
+func (service *Service) DeleteBulk(ctx context.Context, ids []uuid.UUID) error {
+	if err := validateBulkIDs(ids, service.config.MaxBulkSize); err != nil {
+		return err
+	}
+	if err := service.repository.DeleteBulk(ctx, ids); err != nil {
+		return commonent.MapEntError(err, "{{.Name}}")
+	}
+	return nil
+}
+{{end}}
+
+{{if or .Create .CreateBulk}}
+func validateCreate(CreateInput) error { return nil }
+{{end}}
+
+{{if or .Update .UpdateBulk}}
+func validateUpdate(UpdateInput) error {
+	return invalidInput("update requires at least one editable field")
+}
+{{end}}
+
+{{if or .GetBulk .CreateBulk .UpdateBulk .UpsertBulk .DeleteBulk}}
+func validateBulkSize(size, maximum int) error {
+	if size < 1 || size > maximum {
+		return invalidInput(fmt.Sprintf("bulk size must be between 1 and %d", maximum))
+	}
+	return nil
+}
+
+func validateBulkIDs(ids []uuid.UUID, maximum int) error {
+	if err := validateBulkSize(len(ids), maximum); err != nil {
+		return err
+	}
+	return validateUniqueIDs(ids)
+}
+
+func validateUniqueIDs(ids []uuid.UUID) error {
+	seen := make(map[uuid.UUID]struct{}, len(ids))
+	for _, id := range ids {
+		if id == uuid.Nil {
+			return invalidInput("bulk IDs must not be empty")
+		}
+		if _, exists := seen[id]; exists {
+			return invalidInput("bulk IDs must be unique")
+		}
+		seen[id] = struct{}{}
+	}
+	return nil
+}
+
+func modelsFromEntities(rows []*genent.{{.TypeName}}) []Model {
+	models := make([]Model, len(rows))
+	for index, row := range rows {
+		models[index] = modelFromEntity(row)
+	}
+	return models
+}
+{{end}}
+
+{{if or .Find .Update .Upsert .GetBulk .CreateBulk .UpdateBulk .UpsertBulk .DeleteBulk}}
+func invalidInput(message string) error {
+	return apperr.New(apperr.CodeValidationFailed, message, nil)
+}
+{{end}}
+
+func modelFromEntity(row *genent.{{.TypeName}}) Model {
+	model := Model{ID: row.ID, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
+{{if .SoftDelete}}
+	model.DeletedAt = row.DeletedAt
+	model.DeletedBy = row.DeletedBy
+{{end}}
+{{if .Modifier}}
+	model.CreatedBy = row.CreatedBy
+	model.UpdatedBy = row.UpdatedBy
+{{end}}
+	return model
+}

@@ -1,0 +1,87 @@
+package app
+
+import (
+	"entgo.io/ent/dialect/sql"
+	"github.com/gin-gonic/gin"
+	"github.com/huynhanx03/go-common/pkg/logger"
+{{if .HasSoftDelete}}
+	"context"
+	"entgo.io/ent"
+{{end}}
+{{if .HasResources}}
+	"sync"
+	commonent "github.com/huynhanx03/go-common/pkg/database/ent"
+	genent "{{.Module}}/ent"
+	_ "{{.Module}}/ent/runtime"
+{{end}}
+{{if .HasSoftDelete}}
+	genintercept "{{.Module}}/ent/intercept"
+{{end}}
+{{range .Domains}}
+	{{.Alias}} "{{.ImportPath}}"
+{{end}}
+)
+
+{{if .HasResources}}
+var registerEntErrorPredicates sync.Once
+{{end}}
+
+type domainDependencies struct {
+	logger *logger.Logger
+{{if .HasResources}}
+	client *genent.Client
+{{end}}
+}
+
+func newDomainDependencies(driver *sql.Driver, log *logger.Logger) (domainDependencies, func() error, error) {
+{{if .HasResources}}
+	registerEntErrorPredicates.Do(func() {
+		commonent.RegisterErrorPredicates(commonent.ErrorPredicates{
+			IsNotFound: genent.IsNotFound, IsValidationError: genent.IsValidationError,
+			IsConstraintError: genent.IsConstraintError, IsNotLoaded: genent.IsNotLoaded,
+			IsNotSingular: genent.IsNotSingular,
+		})
+	})
+	client := genent.NewClient(genent.Driver(driver))
+{{if .HasSoftDelete}}
+	client.Use(ent.Hook(func(next ent.Mutator) ent.Mutator {
+		softDelete := commonent.SoftDeleteHook(func(ctx context.Context, mutation ent.Mutation) (ent.Value, error) {
+			return mutation.(interface{ Client() *genent.Client }).Client().Mutate(ctx, mutation)
+		})(next)
+		return ent.MutateFunc(func(ctx context.Context, mutation ent.Mutation) (ent.Value, error) {
+			switch mutation.(type) {
+			case {{range $index, $name := .SoftDeleteTypes}}{{if $index}}, {{end}}*genent.{{$name}}Mutation{{end}}:
+				return softDelete.Mutate(ctx, mutation)
+			default:
+				return next.Mutate(ctx, mutation)
+			}
+		})
+	}))
+{{range .SoftDeleteTypes}}
+	client.{{.}}.Intercept(genintercept.TraverseFunc(func(ctx context.Context, query genintercept.Query) error {
+		commonent.SoftDeleteMixin{}.FilterQuery(ctx, query)
+		return nil
+	}))
+{{end}}
+{{end}}
+	return domainDependencies{logger: log, client: client}, client.Close, nil
+{{else}}
+	return domainDependencies{logger: log}, driver.DB().Close, nil
+{{end}}
+}
+
+{{if .HasModifier}}
+// The authentication layer can call commonent.SetActorResolver to stamp actor
+// metadata for resources using ModifierMixin.
+{{end}}
+
+func registerDomains(router *gin.RouterGroup, dependencies domainDependencies) {
+{{range .Domains}}
+	{{.Alias}}.New({{.Alias}}.Dependencies{Logger: dependencies.logger}).Register(router.Group("/{{.Name}}"))
+{{if .HasResources}}
+	{{.Alias}}.RegisterResources(router.Group("/{{.Name}}"), dependencies.client)
+{{else}}
+	{{.Alias}}.RegisterResources(router.Group("/{{.Name}}"))
+{{end}}
+{{end}}
+}

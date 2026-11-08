@@ -1,0 +1,21 @@
+package {{.Domain}}
+
+import (
+	"github.com/gin-gonic/gin"
+{{if .HasResources}}
+	genent "{{.Module}}/ent"
+{{range .Resources}}
+	{{.Alias}} "{{.ImportPath}}"
+{{end}}
+{{end}}
+)
+
+{{if .HasResources}}
+func RegisterResources(router *gin.RouterGroup, client *genent.Client) {
+{{range .Resources}}
+	{{.Alias}}.Register(router.Group("/{{.Route}}"), {{.Alias}}.Dependencies{Client: client})
+{{end}}
+}
+{{else}}
+func RegisterResources(*gin.RouterGroup) {}
+{{end}}

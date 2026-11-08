@@ -1,0 +1,92 @@
+package app
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"sync"
+	"time"
+
+	commonhttp "github.com/huynhanx03/go-common/pkg/common/http"
+	"github.com/huynhanx03/go-common/pkg/common/health"
+	"github.com/huynhanx03/go-common/pkg/common/lifecycle"
+	commonent "github.com/huynhanx03/go-common/pkg/database/ent"
+	"github.com/huynhanx03/go-common/pkg/logger"
+)
+
+type App struct {
+	logger    *logger.Logger
+	runner    *lifecycle.Runner
+	closeFunc func() error
+	close     sync.Once
+	closeErr  error
+}
+
+func New(ctx context.Context, config Config) (*App, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	log, err := logger.NewLogger(config.Logger)
+	if err != nil {
+		return nil, err
+	}
+	driver, err := commonent.NewDriver(config.Database)
+	if err != nil {
+		_ = log.Sync()
+		return nil, err
+	}
+	domains, closeDomains, err := newDomainDependencies(driver, log)
+	if err != nil {
+		return nil, errors.Join(err, driver.DB().Close(), log.Sync())
+	}
+	closeDependencies := func(cause error) (*App, error) {
+		return nil, errors.Join(cause, closeDomains(), log.Sync())
+	}
+
+	checks, err := health.New(health.Options{})
+	if err != nil {
+		return closeDependencies(err)
+	}
+	if err := checks.Register("database", databaseCheck{db: driver.DB()}, health.CheckOptions{
+		Probes: health.ProbeReadiness, Critical: true, Timeout: readinessTimeout, ErrorCode: "database_unavailable",
+	}); err != nil {
+		return closeDependencies(err)
+	}
+
+	server, err := commonhttp.NewServer(newHTTPHandler(log, checks, domains), commonhttp.DefaultServerOptions(config.Address))
+	if err != nil {
+		return closeDependencies(err)
+	}
+	runner, err := lifecycle.New(log, lifecycle.Options{})
+	if err != nil {
+		return closeDependencies(err)
+	}
+	if err := runner.Add(server, lifecycle.ComponentOptions{Required: true}); err != nil {
+		return closeDependencies(err)
+	}
+	return &App{logger: log, runner: runner, closeFunc: closeDomains}, nil
+}
+
+func (application *App) Run(ctx context.Context) error {
+	return application.runner.Run(ctx)
+}
+
+func (application *App) Shutdown(ctx context.Context) error {
+	runnerErr := application.runner.Shutdown(ctx)
+	application.close.Do(func() {
+		application.closeErr = errors.Join(application.closeFunc(), application.logger.Sync())
+	})
+	return errors.Join(runnerErr, application.closeErr)
+}
+
+type databaseCheck struct {
+	db *sql.DB
+}
+
+func (check databaseCheck) Check(ctx context.Context) error {
+	return check.db.PingContext(ctx)
+}
+
+var _ health.Checker = databaseCheck{}
+
+const readinessTimeout = 5 * time.Second

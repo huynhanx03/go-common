@@ -1,0 +1,21 @@
+package app
+
+import (
+	"github.com/gin-gonic/gin"
+	"github.com/huynhanx03/go-common/pkg/common/health"
+	"github.com/huynhanx03/go-common/pkg/common/http/middlewares"
+	"github.com/huynhanx03/go-common/pkg/logger"
+)
+
+func newHTTPHandler(log *logger.Logger, checks *health.Registry, dependencies domainDependencies) *gin.Engine {
+	router := gin.New()
+	router.Use(
+		middlewares.RecoveryMiddleware(log),
+		middlewares.RequestLogger(log),
+	)
+	probe := health.HTTPHandler(checks)
+	router.GET("/live", gin.WrapH(probe))
+	router.GET("/ready", gin.WrapH(probe))
+	registerDomains(router.Group("/api/v1"), dependencies)
+	return router
+}

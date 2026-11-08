@@ -1,0 +1,84 @@
+package {{.Name}}
+
+import (
+{{if .Find}}
+	"github.com/huynhanx03/go-common/pkg/dto"
+{{end}}
+{{if or .Upsert .GetBulk .UpdateBulk .UpsertBulk .DeleteBulk}}
+	"github.com/google/uuid"
+{{end}}
+)
+
+{{if .Find}}
+type FindPagination struct {
+	Page     int `json:"page"`
+	PageSize int `json:"page_size"`
+}
+
+type FindInput struct {
+	Pagination *FindPagination    `json:"pagination,omitempty"`
+	Filters    []dto.SearchFilter `json:"filters"`
+	Sort       []dto.SortOption   `json:"sort"`
+}
+{{end}}
+
+{{if or .Create .CreateBulk}}
+type CreateInput struct {
+	// Add explicitly writable business fields here; never bind system metadata.
+}
+{{end}}
+
+{{if or .Update .UpdateBulk}}
+type UpdateInput struct {
+	ID string `uri:"id" json:"-" validate:"required"`
+	// Add optional, explicitly writable business fields here.
+}
+{{end}}
+
+{{if or .Get .Delete}}
+type IDInput struct {
+	ID string `uri:"id" validate:"required"`
+}
+{{end}}
+
+{{if or .Upsert .UpsertBulk}}
+type UpsertInput struct {
+	ID uuid.UUID `json:"id" validate:"required"`
+	// Add explicitly writable business fields here; ID is the conflict target.
+}
+{{end}}
+
+{{if .GetBulk}}
+type GetBulkInput struct {
+	IDs []uuid.UUID `json:"ids"`
+}
+{{end}}
+
+{{if .CreateBulk}}
+type CreateBulkInput struct {
+	Items []CreateInput `json:"items"`
+}
+{{end}}
+
+{{if .UpdateBulk}}
+type UpdateItem struct {
+	ID      uuid.UUID   `json:"id"`
+	Changes UpdateInput `json:"changes"`
+}
+
+type UpdateBulkInput struct {
+	Items []UpdateItem `json:"items"`
+}
+{{end}}
+
+{{if .UpsertBulk}}
+type UpsertBulkInput struct {
+	Items []UpsertInput `json:"items"`
+}
+{{end}}
+
+{{if .DeleteBulk}}
+type DeleteBulkInput struct {
+	IDs []uuid.UUID `json:"ids"`
+}
+{{end}}

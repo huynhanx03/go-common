@@ -67,6 +67,7 @@ Production-facing packages follow the same rules:
 
 ## Documentation
 
+- [comxkit project scaffolder](docs/comxkit.md)
 - [v0 to v1 migration](docs/migration-v0-to-v1.md)
 - [Security model](docs/security.md)
 - [Lifecycle and health](docs/lifecycle.md)
@@ -91,8 +92,8 @@ Production-facing packages follow the same rules:
 ```text
 go-common/
 ├── pkg/       # Public capability packages
-├── internal/  # Reserved for future private shared implementation
-├── cmd/       # Reserved for future executable commands
+├── internal/  # Private implementations, including the comxkit generator
+├── cmd/       # Executable commands, including comxkit
 ├── docs/      # Compatibility and operating contracts
 ├── scripts/   # Deterministic local/CI entry points
 └── .github/   # Continuous-integration workflows

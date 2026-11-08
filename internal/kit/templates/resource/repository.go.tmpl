@@ -1,0 +1,199 @@
+package {{.Name}}
+
+import (
+	"context"
+{{if or .Upsert .UpsertBulk}}
+	"database/sql"
+	"errors"
+{{end}}
+{{if or .Get .Delete .Update .Upsert .GetBulk .UpdateBulk .UpsertBulk .DeleteBulk}}
+	"github.com/google/uuid"
+{{end}}
+{{if .Find}}
+	entsql "entgo.io/ent/dialect/sql"
+	"github.com/huynhanx03/go-common/pkg/dto"
+{{end}}
+{{if or .Find .CreateBulk .UpdateBulk .UpsertBulk .DeleteBulk}}
+	commonent "github.com/huynhanx03/go-common/pkg/database/ent"
+{{end}}
+	genent "{{.Module}}/ent"
+{{if or .GetBulk .Upsert .UpsertBulk}}
+	{{.Name}} "{{.Module}}/ent/{{.PackageName}}"
+{{end}}
+)
+
+type Repository struct {
+	client *genent.Client
+}
+
+func NewRepository(client *genent.Client) *Repository {
+	return &Repository{client: client}
+}
+
+{{if .Find}}
+func (repository *Repository) Find(ctx context.Context, options *dto.QueryOptions) ([]*genent.{{.TypeName}}, int, error) {
+	query := repository.client.{{.TypeName}}.Query()
+	count, err := query.Clone().Modify(func(selector *entsql.Selector) {
+		commonent.ApplyQueryFilters(options, selector, findFieldNames...)
+	}).Count(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	rows, err := query.Clone().Modify(func(selector *entsql.Selector) {
+		commonent.ApplyQueryOptions(options, selector, findFieldNames...)
+	}).All(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	return rows, count, nil
+}
+{{end}}
+
+{{if .Get}}
+func (repository *Repository) Get(ctx context.Context, id uuid.UUID) (*genent.{{.TypeName}}, error) {
+	return repository.client.{{.TypeName}}.Get(ctx, id)
+}
+{{end}}
+
+{{if .Create}}
+func (repository *Repository) Create(ctx context.Context, input CreateInput) (*genent.{{.TypeName}}, error) {
+	return prepareCreate(repository.client.{{.TypeName}}.Create(), input).Save(ctx)
+}
+{{end}}
+
+{{if .Update}}
+func (repository *Repository) Update(ctx context.Context, id uuid.UUID, input UpdateInput) (*genent.{{.TypeName}}, error) {
+	return saveUpdate(ctx, repository.client, id, input)
+}
+{{end}}
+
+{{if .Upsert}}
+func (repository *Repository) Upsert(ctx context.Context, id uuid.UUID) (*genent.{{.TypeName}}, error) {
+	return upsert(ctx, repository.client, id)
+}
+{{end}}
+
+{{if .Delete}}
+func (repository *Repository) Delete(ctx context.Context, id uuid.UUID) error {
+	return repository.client.{{.TypeName}}.DeleteOneID(id).Exec(ctx)
+}
+{{end}}
+
+{{if .GetBulk}}
+func (repository *Repository) GetBulk(ctx context.Context, ids []uuid.UUID) ([]*genent.{{.TypeName}}, error) {
+	rows, err := repository.client.{{.TypeName}}.Query().Where({{.Name}}.IDIn(ids...)).All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[uuid.UUID]*genent.{{.TypeName}}, len(rows))
+	for _, row := range rows {
+		byID[row.ID] = row
+	}
+	ordered := make([]*genent.{{.TypeName}}, len(ids))
+	for index, id := range ids {
+		row, exists := byID[id]
+		if !exists {
+			_, err := repository.client.{{.TypeName}}.Get(ctx, id)
+			return nil, err
+		}
+		ordered[index] = row
+	}
+	return ordered, nil
+}
+{{end}}
+
+{{if .CreateBulk}}
+func (repository *Repository) CreateBulk(ctx context.Context, items []CreateInput) ([]*genent.{{.TypeName}}, error) {
+	var rows []*genent.{{.TypeName}}
+	err := commonent.WithTx(ctx, repository.client.Tx, func(transaction *genent.Tx) error {
+		builders := make([]*genent.{{.TypeName}}Create, len(items))
+		for index, item := range items {
+			builders[index] = prepareCreate(transaction.{{.TypeName}}.Create(), item)
+		}
+		created, err := transaction.{{.TypeName}}.CreateBulk(builders...).Save(ctx)
+		if err != nil {
+			return err
+		}
+		rows = created
+		return nil
+	})
+	return rows, err
+}
+{{end}}
+
+{{if .UpdateBulk}}
+func (repository *Repository) UpdateBulk(ctx context.Context, items []UpdateItem) ([]*genent.{{.TypeName}}, error) {
+	rows := make([]*genent.{{.TypeName}}, len(items))
+	err := commonent.WithTx(ctx, repository.client.Tx, func(transaction *genent.Tx) error {
+		client := transaction.Client()
+		for index, item := range items {
+			row, err := saveUpdate(ctx, client, item.ID, item.Changes)
+			if err != nil {
+				return err
+			}
+			rows[index] = row
+		}
+		return nil
+	})
+	return rows, err
+}
+{{end}}
+
+{{if .UpsertBulk}}
+func (repository *Repository) UpsertBulk(ctx context.Context, items []UpsertInput) ([]*genent.{{.TypeName}}, error) {
+	rows := make([]*genent.{{.TypeName}}, len(items))
+	err := commonent.WithTx(ctx, repository.client.Tx, func(transaction *genent.Tx) error {
+		client := transaction.Client()
+		for index, item := range items {
+			row, err := upsert(ctx, client, item.ID)
+			if err != nil {
+				return err
+			}
+			rows[index] = row
+		}
+		return nil
+	})
+	return rows, err
+}
+{{end}}
+
+{{if .DeleteBulk}}
+func (repository *Repository) DeleteBulk(ctx context.Context, ids []uuid.UUID) error {
+	return commonent.WithTx(ctx, repository.client.Tx, func(transaction *genent.Tx) error {
+		for _, id := range ids {
+			if err := transaction.{{.TypeName}}.DeleteOneID(id).Exec(ctx); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+{{end}}
+
+{{if or .Create .CreateBulk}}
+func prepareCreate(builder *genent.{{.TypeName}}Create, _ CreateInput) *genent.{{.TypeName}}Create {
+	return builder
+}
+{{end}}
+
+{{if or .Update .UpdateBulk}}
+func saveUpdate(ctx context.Context, client *genent.Client, id uuid.UUID, input UpdateInput) (*genent.{{.TypeName}}, error) {
+	builder := client.{{.TypeName}}.UpdateOneID(id)
+	return prepareUpdate(builder, input).Save(ctx)
+}
+
+func prepareUpdate(builder *genent.{{.TypeName}}UpdateOne, _ UpdateInput) *genent.{{.TypeName}}UpdateOne {
+	return builder
+}
+{{end}}
+
+{{if or .Upsert .UpsertBulk}}
+func upsert(ctx context.Context, client *genent.Client, id uuid.UUID) (*genent.{{.TypeName}}, error) {
+	if err := client.{{.TypeName}}.Create().SetID(id).
+		OnConflictColumns({{.Name}}.FieldID).
+		DoNothing().Exec(ctx); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	return client.{{.TypeName}}.Get(ctx, id)
+}
+{{end}}

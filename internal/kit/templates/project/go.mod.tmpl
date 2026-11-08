@@ -1,0 +1,12 @@
+module {{.Module}}
+
+go {{.GoVersion}}
+
+require (
+	entgo.io/ent {{.EntVersion}}
+	github.com/gin-gonic/gin {{.GinVersion}}
+	github.com/google/uuid {{.UUIDVersion}}
+	github.com/huynhanx03/go-common {{.CommonVersion}}
+)
+
+tool entgo.io/ent/cmd/ent
