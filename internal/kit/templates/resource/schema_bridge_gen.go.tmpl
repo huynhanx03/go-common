@@ -1,0 +1,19 @@
+package main
+
+import (
+	"context"
+
+	"entgo.io/ent/dialect"
+	"entgo.io/ent/dialect/sql/schema"
+	"{{.Module}}/ent/migrate"
+)
+
+func desiredSchema(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if len(migrate.Tables) == 0 {
+		return "", nil
+	}
+	return schema.DDL(ctx, schema.DDLArgs{Dialect: dialect.Postgres, Tables: migrate.Tables})
+}

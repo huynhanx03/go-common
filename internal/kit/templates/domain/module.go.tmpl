@@ -1,0 +1,21 @@
+package {{.Domain}}
+
+import (
+	"github.com/gin-gonic/gin"
+	"github.com/huynhanx03/go-common/pkg/logger"
+)
+
+type Dependencies struct {
+	Logger *logger.Logger
+}
+
+type Module struct {
+	dependencies Dependencies
+}
+
+func New(dependencies Dependencies) *Module {
+	return &Module{dependencies: dependencies}
+}
+
+// Register is the project-owned extension point for domain-level routes.
+func (module *Module) Register(*gin.RouterGroup) {}

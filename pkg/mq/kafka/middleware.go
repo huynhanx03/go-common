@@ -2,8 +2,8 @@ package kafka
 
 import (
 	"context"
-	"fmt"
-	"runtime/debug"
+
+	"github.com/huynhanx03/go-common/pkg/mq/consumer"
 )
 
 // Chain wraps a handler with a list of middlewares
@@ -22,13 +22,14 @@ func Chain(h Handler, mws ...Middleware) Handler {
 
 // Recovery catches panics in the handler and returns an error instead of crashing
 func Recovery(next Handler) Handler {
-	return func(ctx context.Context, key, value []byte) (err error) {
-		defer func() {
-			if r := recover(); r != nil {
-				stack := string(debug.Stack())
-				err = fmt.Errorf("panic recovered in kafka handler: %v\nStack: %s", r, stack)
-			}
-		}()
-		return next(ctx, key, value)
+	wrapped := consumer.Recovery(func(ctx context.Context, message consumer.Message) (consumer.Outcome, error) {
+		if err := next(ctx, message.Key, message.Value); err != nil {
+			return consumer.Retry, err
+		}
+		return consumer.Success, nil
+	})
+	return func(ctx context.Context, key, value []byte) error {
+		_, err := wrapped(ctx, consumer.Message{Key: key, Value: value})
+		return err
 	}
 }

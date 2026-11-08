@@ -1,0 +1,90 @@
+services:
+  postgres:
+    extends:
+      file: infrastructure/docker/postgres.yml
+      service: postgres
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+
+  postgres-tools:
+    extends:
+      file: infrastructure/docker/postgres.yml
+      service: postgres-tools
+    profiles: ["tools"]
+    ports:
+      - "127.0.0.1:${POSTGRES_TOOLS_PORT:-5433}:5432"
+    volumes:
+      - postgres_tools_data:/var/lib/postgresql
+
+  migrator:
+    build:
+      context: .
+      target: migrator
+      args:
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
+        GOPRIVATE: ${GOPRIVATE:-}
+        GONOSUMDB: ${GONOSUMDB:-}
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-go_common}?sslmode=disable
+      MIGRATION_DATABASE_URL: postgres://${POSTGRES_TOOLS_USER:-atlas}:${POSTGRES_TOOLS_PASSWORD:-atlas}@postgres-tools:5432/${POSTGRES_TOOLS_DB:-atlas_dev}?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["apply"]
+    restart: "no"
+
+  atlas:
+    build:
+      context: .
+      target: migrator
+      args:
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
+        GOPRIVATE: ${GOPRIVATE:-}
+        GONOSUMDB: ${GONOSUMDB:-}
+    profiles: ["tools"]
+    entrypoint: ["/usr/local/bin/atlas"]
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-go_common}?sslmode=disable
+      MIGRATION_DATABASE_URL: postgres://${POSTGRES_TOOLS_USER:-atlas}:${POSTGRES_TOOLS_PASSWORD:-atlas}@postgres-tools:5432/${POSTGRES_TOOLS_DB:-atlas_dev}?sslmode=disable
+    depends_on:
+      postgres-tools:
+        condition: service_healthy
+    volumes:
+      - ./migrations:/app/migrations
+      - ${COMXKIT_SCHEMA_FILE:-./schema.sql}:/app/schema.sql:ro
+
+  api:
+    build:
+      context: .
+      target: api
+      args:
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
+        GOPRIVATE: ${GOPRIVATE:-}
+        GONOSUMDB: ${GONOSUMDB:-}
+    environment:
+      APP_ENV: ${APP_ENV:-dev}
+      HTTP_ADDRESS: :8080
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: ${POSTGRES_DB:-go_common}
+      DATABASE_USER: ${POSTGRES_USER:-postgres}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:${HTTP_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/live || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+volumes:
+  postgres_data:
+  postgres_tools_data:

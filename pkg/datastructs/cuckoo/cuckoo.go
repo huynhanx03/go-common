@@ -124,8 +124,19 @@ func (f *Filter) Add(item string) error {
 		i = i2
 	}
 
+	type relocation struct {
+		bucket uint
+		slot   uint8
+		old    uint16
+	}
+	var moves [maxKicks]relocation
+	moved := 0
 	for k := 0; k < maxKicks; k++ {
-		fp = f.buckets[i].swap(f.rnd.Intn(bucketSize), fp)
+		slot := f.rnd.Intn(bucketSize)
+		old := f.buckets[i].swap(slot, fp)
+		moves[moved] = relocation{bucket: i, slot: uint8(slot), old: old}
+		moved++
+		fp = old
 
 		hf := hash.Sum128(uint64(fp)).Secondary
 		i = i ^ uint(hf%uint64(f.m))
@@ -134,6 +145,11 @@ func (f *Filter) Add(item string) error {
 			f.count++
 			return nil
 		}
+	}
+	// Restore each displaced fingerprint so a failed insert preserves the filter.
+	for k := moved - 1; k >= 0; k-- {
+		move := moves[k]
+		f.buckets[move.bucket].swap(int(move.slot), move.old)
 	}
 
 	return errors.New("filter full")

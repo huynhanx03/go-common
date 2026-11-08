@@ -11,30 +11,20 @@ import (
 	"testing"
 	"time"
 
-	"entgo.io/ent/dialect"
-	entsql "entgo.io/ent/dialect/sql"
 	"github.com/huynhanx03/go-common/pkg/common/cache"
 	"github.com/huynhanx03/go-common/pkg/common/cache/ristretto"
 	"github.com/huynhanx03/go-common/pkg/i18n"
 	i18nent "github.com/huynhanx03/go-common/pkg/i18n/ent"
 	"github.com/huynhanx03/go-common/pkg/logger"
 	"github.com/huynhanx03/go-common/pkg/settings"
-	"github.com/huynhanx03/go-common/pkg/testutil/containers"
-	_ "github.com/lib/pq"
+	enttest "github.com/huynhanx03/go-common/pkg/testutil/ent"
 )
 
 func postgresManager(t *testing.T) (*sql.DB, *i18nent.Store, *i18n.Manager, *cache.Cache) {
 	t.Helper()
-	db, err := sql.Open("postgres", containers.StartPostgres(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
+	db, driver := enttest.OpenPostgres(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := db.PingContext(ctx); err != nil {
-		t.Fatal(err)
-	}
 	create := fmt.Sprintf(`CREATE TABLE %s (
 		id SERIAL PRIMARY KEY,
 		domain VARCHAR(%d) NOT NULL,
@@ -48,7 +38,7 @@ func postgresManager(t *testing.T) (*sql.DB, *i18nent.Store, *i18n.Manager, *cac
 	if _, err := db.ExecContext(ctx, create); err != nil {
 		t.Fatal(err)
 	}
-	store, err := i18nent.NewStore(entsql.OpenDB(dialect.Postgres, db))
+	store, err := i18nent.NewStore(driver)
 	if err != nil {
 		t.Fatal(err)
 	}

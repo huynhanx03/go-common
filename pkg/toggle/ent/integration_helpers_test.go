@@ -11,38 +11,23 @@ import (
 	"time"
 
 	"entgo.io/ent/dialect"
-	entsql "entgo.io/ent/dialect/sql"
 	"github.com/huynhanx03/go-common/pkg/settings"
-	"github.com/huynhanx03/go-common/pkg/testutil/containers"
+	enttest "github.com/huynhanx03/go-common/pkg/testutil/ent"
 	"github.com/huynhanx03/go-common/pkg/toggle"
 	"github.com/huynhanx03/go-common/pkg/toggle/core"
 	toggleent "github.com/huynhanx03/go-common/pkg/toggle/ent"
-	_ "github.com/lib/pq"
 )
 
 var postgresScope = toggle.Scope{Namespace: "billing", Environment: "test"}
 
 func newPostgres(t *testing.T) (*sql.DB, dialect.Driver, *toggleent.Store, *toggle.Manager) {
 	t.Helper()
-	dsn := containers.StartPostgres(t)
-	db, err := sql.Open("postgres", dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
-			t.Errorf("close test database: %v", err)
-		}
-	})
+	db, driver := enttest.OpenPostgres(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := db.PingContext(ctx); err != nil {
-		t.Fatalf("connect to test database: %v", err)
-	}
 	if err := createToggleSchema(ctx, db); err != nil {
 		t.Fatalf("create toggle test schema: %v", err)
 	}
-	driver := entsql.OpenDB(dialect.Postgres, db)
 	store, err := toggleent.NewStore(driver)
 	if err != nil {
 		t.Fatal(err)

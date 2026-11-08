@@ -2,9 +2,13 @@ package stripe
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/huynhanx03/go-common/pkg/payment"
+	stripesdk "github.com/stripe/stripe-go/v87"
 )
 
 // A VND (zero-decimal) checkout session with automatic tax applied.
@@ -154,5 +158,48 @@ func TestOpenSubscriptionDiscountWinsOverPromotionCodes(t *testing.T) {
 	// Mutually exclusive: an explicit discount suppresses allow_promotion_codes.
 	if got := captured.formValue("allow_promotion_codes"); got != "" {
 		t.Fatalf("allow_promotion_codes = %q, want it omitted when discounts are set", got)
+	}
+}
+
+func TestFetchCheckoutMapsCompletedSession(t *testing.T) {
+	t.Parallel()
+
+	provider, captured := newTestProvider(t, `{
+	  "id":"cs_paid","object":"checkout.session","status":"complete","payment_status":"paid",
+	  "currency":"usd","amount_total":2500,"total_details":{"amount_tax":200},
+	  "client_reference_id":"order_1","customer":{"id":"cus_1","object":"customer"},
+	  "subscription":{"id":"sub_1","object":"subscription"},"invoice":{"id":"in_1","object":"invoice"},
+	  "payment_intent":{"id":"pi_1","object":"payment_intent"}
+	}`)
+
+	checkout, appErr := provider.FetchCheckout(context.Background(), "cs_paid")
+	if appErr != nil {
+		t.Fatalf("FetchCheckout returned an error: %v", appErr)
+	}
+	if captured.method != http.MethodGet || captured.path != "/v1/checkout/sessions/cs_paid" {
+		t.Fatalf("request = %s %s", captured.method, captured.path)
+	}
+	if !checkout.Confirmed() || checkout.PaymentStatus != payment.CheckoutPaymentStatusPaid || checkout.CustomerRef != "cus_1" || checkout.SubscriptionRef != "sub_1" || checkout.InvoiceRef != "in_1" || checkout.PaymentIntentRef != "pi_1" {
+		t.Fatalf("checkout mapping = %+v", checkout)
+	}
+	if checkout.AmountTotal != payment.NewMoney(2500, "usd") || checkout.AmountTax != payment.NewMoney(200, "usd") || checkout.ClientReferenceID != "order_1" {
+		t.Fatalf("checkout totals/reference = %+v", checkout)
+	}
+}
+
+func TestFetchCheckoutReturnsSafeClassifiedProviderFailure(t *testing.T) {
+	t.Parallel()
+
+	provider, _ := newTestProviderWithStatus(t, http.StatusPaymentRequired, `{"error":{"type":"card_error","code":"card_declined","decline_code":"insufficient_funds","message":"private processor detail"}}`)
+	_, appErr := provider.FetchCheckout(context.Background(), "cs_failed")
+	if appErr == nil || appErr.Code != payment.CodePaymentDeclined {
+		t.Fatalf("FetchCheckout failure = %+v; want a declined-payment app error", appErr)
+	}
+	if strings.Contains(appErr.Message, "private processor detail") {
+		t.Fatalf("provider detail leaked to the client: %q", appErr.Message)
+	}
+	var providerErr *stripesdk.Error
+	if !errors.As(appErr, &providerErr) {
+		t.Fatal("provider cause was not preserved for server-side diagnostics")
 	}
 }

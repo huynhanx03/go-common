@@ -33,6 +33,30 @@ Forge uses ordinary blocking mutexes around filesystem work. Do not open the
 same data directory through multiple `Broker` values, even inside one process.
 Share one broker and create producers/consumers from it.
 
+## Shared consumer runtime
+
+```go
+processor, err := consumer.New(handle,
+	consumer.WithWorkers(8),
+	consumer.WithQueueCapacity(256),
+)
+if err != nil {
+	return err
+}
+err = source.Run(ctx, processor)
+```
+
+`source` is a `*forge.Consumer`. The [shared runtime](../consumer/README.md)
+provides ordering, priority, backpressure and optional batching. Forge supplies
+one ordered stream per topic; use key ordering or unordered mode only when the
+service permits parallel effects within a topic.
+
+`Run` owns fetch/cursor/commit operations until it returns. It durably commits
+one completed contiguous prefix per fetched window, publishes DLQ records
+before acknowledging them, and rolls back its cursor on retry. Retry returns
+an error so the caller can back off and call `Run` again. Stop the source loop
+before closing the caller-owned runtime with a shutdown context.
+
 The stable v1 scope intentionally excludes log compaction and segment merging.
 Those operations require a durable operation manifest and a larger crash matrix;
 whole-segment retention is sufficient for queue workloads.
@@ -143,6 +167,59 @@ as `Close` from the callback goroutine.
   to reclaim data it pinned.
 - `NackContext` writes to a configured DLQ with `AckFsync`. Prefer a retry policy before
   DLQ for transient failures.
+
+`Consumer.Handle` adapts the shared `pkg/mq/consumer` outcomes to Forge offsets:
+
+- `Success` commits the delivery's next offset.
+- `Retry` rolls the fetch cursor back to the last commit.
+- `DeadLetter` writes the delivery to the configured DLQ with `AckFsync`, then
+  commits its source offset.
+
+Process deliveries in fetch order. Stop handling the current batch after
+`Retry`; the next fetch starts again at the last committed offset. The caller
+controls retry delay and worker lifecycle.
+
+```go
+import (
+	"context"
+	"log/slog"
+
+	mqconsumer "github.com/huynhanx03/go-common/pkg/mq/consumer"
+)
+
+deliveries, err := queue.FetchWait(ctx, 32, forge.DefaultFetchWaitInterval)
+if err != nil {
+	return err
+}
+
+handler := mqconsumer.Recovery(func(
+	ctx context.Context,
+	message mqconsumer.Message,
+) (mqconsumer.Outcome, error) {
+	if err := apply(ctx, message.Value); err != nil {
+		return mqconsumer.Retry, err
+	}
+	return mqconsumer.Success, nil
+})
+
+for _, delivery := range deliveries {
+	outcome, err := queue.Handle(ctx, delivery, handler)
+	if outcome == mqconsumer.Retry {
+		if err != nil {
+			slog.ErrorContext(ctx, "message will be retried", "error", err)
+		}
+		// Apply the worker's retry delay before fetching the rolled-back delivery.
+		break
+	}
+	if err != nil {
+		return err
+	}
+}
+```
+
+`DeadLetter` is at least once: if the DLQ write succeeds but committing the
+source offset fails, the delivery can be written to the DLQ again after retry.
+Inbox deduplication is intentionally separate from this consumer contract.
 
 The old `Poll`, `Commit`, and `Seek` methods are compatibility shims. New code
 should use explicit deliveries and offsets.

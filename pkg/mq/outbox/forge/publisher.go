@@ -9,13 +9,14 @@ import (
 	"unicode/utf8"
 
 	"github.com/huynhanx03/go-common/pkg/logger"
+	"github.com/huynhanx03/go-common/pkg/mq/consumer"
 	forgecore "github.com/huynhanx03/go-common/pkg/mq/forge"
 	"github.com/huynhanx03/go-common/pkg/mq/outbox"
 )
 
 const (
 	// HeaderMessageID carries the stable outbox message identity.
-	HeaderMessageID = "go-common.outbox.message-id"
+	HeaderMessageID = consumer.OutboxMessageIDHeader
 	// HeaderCorrelationID carries the end-to-end correlation identity.
 	HeaderCorrelationID = "go-common.correlation-id"
 	// HeaderAttributePrefix namespaces caller metadata headers.

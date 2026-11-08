@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -117,6 +118,11 @@ func TestPublisherClonesRoutesAndRejectsInvalidConstruction(t *testing.T) {
 			}
 		})
 	}
+
+	var typedNilProducer *forgecore.Producer
+	if _, err := NewPublisher(map[string]*forgecore.Producer{"events": typedNilProducer}); !errors.Is(err, ErrInvalidRoutes) {
+		t.Fatalf("NewPublisher with typed nil producer error = %v, want ErrInvalidRoutes", err)
+	}
 }
 
 func TestPublisherRejectsMissingRouteAndUnsafeMessage(t *testing.T) {
@@ -136,6 +142,10 @@ func TestPublisherRejectsMissingRouteAndUnsafeMessage(t *testing.T) {
 		{name: "empty message ID", message: outbox.Message{Destination: "events"}, wantCode: CodeInvalidMessage},
 		{name: "unsafe correlation ID", message: outbox.Message{ID: "message-1", Destination: "events", Metadata: outbox.Metadata{CorrelationID: "bad correlation ID"}}, wantCode: CodeInvalidMessage},
 		{name: "unsafe attribute", message: outbox.Message{ID: "message-1", Destination: "events", Metadata: outbox.Metadata{Attributes: []outbox.Attribute{{Key: "bad key", Value: "v"}}}}, wantCode: CodeInvalidMessage},
+		{name: "empty attribute key", message: outbox.Message{ID: "message-1", Destination: "events", Metadata: outbox.Metadata{Attributes: []outbox.Attribute{{Key: "", Value: "v"}}}}, wantCode: CodeInvalidMessage},
+		{name: "oversized attribute key", message: outbox.Message{ID: "message-1", Destination: "events", Metadata: outbox.Metadata{Attributes: []outbox.Attribute{{Key: strings.Repeat("k", maximumAttributeBytes+1), Value: "v"}}}}, wantCode: CodeInvalidMessage},
+		{name: "unsafe attribute value", message: outbox.Message{ID: "message-1", Destination: "events", Metadata: outbox.Metadata{Attributes: []outbox.Attribute{{Key: "region", Value: "west\ninjected"}}}}, wantCode: CodeInvalidMessage},
+		{name: "case-insensitive duplicate attributes", message: outbox.Message{ID: "message-1", Destination: "events", Metadata: outbox.Metadata{Attributes: []outbox.Attribute{{Key: "Region", Value: "west"}, {Key: "region", Value: "east"}}}}, wantCode: CodeInvalidMessage},
 	}
 	for _, test := range tests {
 		test := test

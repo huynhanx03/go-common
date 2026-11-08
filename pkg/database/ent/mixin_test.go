@@ -189,23 +189,17 @@ func TestSoftDeleteHookSkipDeletesPermanently(t *testing.T) {
 	}
 }
 
-func TestSoftDeleteInterceptorFiltersQueries(t *testing.T) {
-	interceptor := SoftDeleteMixin{}.Interceptors()[0].(ent.TraverseFunc)
-
-	q := &fakeMutation{} // has WhereP, that's all Traverse needs
-	if err := interceptor.Traverse(context.Background(), q); err != nil {
-		t.Fatal(err)
-	}
-	if q.predicates != 1 {
-		t.Fatalf("predicates = %d, want 1", q.predicates)
+func TestSoftDeleteFilterQueryRespectsSkipContext(t *testing.T) {
+	query := &fakeMutation{}
+	SoftDeleteMixin{}.FilterQuery(context.Background(), query)
+	if query.predicates != 1 {
+		t.Fatalf("predicates = %d, want active-row filter", query.predicates)
 	}
 
 	skipped := &fakeMutation{}
-	if err := interceptor.Traverse(SkipSoftDelete(context.Background()), skipped); err != nil {
-		t.Fatal(err)
-	}
+	SoftDeleteMixin{}.FilterQuery(SkipSoftDelete(context.Background()), skipped)
 	if skipped.predicates != 0 {
-		t.Fatalf("predicates = %d, want 0 under SkipSoftDelete", skipped.predicates)
+		t.Fatalf("predicates = %d, want no filter when soft delete is skipped", skipped.predicates)
 	}
 }
 

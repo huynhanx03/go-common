@@ -1,0 +1,37 @@
+.PHONY: setup generate run-local stop migrate-diff migrate test
+
+shell_quote = '$(subst ','"'"',$(1))'
+
+setup:
+	@if [ ! -f .env ]; then cp .env.example .env; fi
+	$(MAKE) generate
+
+generate:
+	@if find ent/schema -maxdepth 1 -type f -name '*.go' -print -quit | grep -q .; then go generate ./ent; else echo "No Ent schemas to generate"; fi
+	go mod tidy
+
+run-local:
+	docker compose up --detach --build --wait
+
+stop:
+	docker compose stop
+
+migrate-diff:
+	@set -e; \
+	name=$(call shell_quote,$(name)); \
+	case "$$name" in ""|[!A-Za-z0-9]*|*[!A-Za-z0-9_-]*) echo "migration name must start with a letter or number and contain only letters, numbers, underscores, or hyphens" >&2; exit 1;; esac; \
+	if [ "$${#name}" -gt 64 ]; then echo "migration name must be at most 64 characters" >&2; exit 1; fi; \
+	$(MAKE) generate; \
+	schema_file=$$(mktemp "$$PWD/.comxkit-schema.XXXXXX"); \
+	trap 'rm -f "$$schema_file"' EXIT; \
+	docker compose build migrator; \
+	docker compose run --rm --no-deps --entrypoint /app/migrate migrator schema > "$$schema_file"; \
+	chmod 0644 "$$schema_file"; \
+	docker compose --profile tools up --detach --wait postgres-tools; \
+	COMXKIT_SCHEMA_FILE="$$schema_file" docker compose --profile tools run --rm --build --user "$$(id -u):$$(id -g)" atlas migrate diff "$$name" --env diff
+
+migrate:
+	docker compose run --rm --build migrator apply
+
+test:
+	go test ./...

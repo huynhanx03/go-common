@@ -28,6 +28,7 @@ func TestGetHTTPCode(t *testing.T) {
 		{"conflict", apperr.CodeConflict, http.StatusConflict},
 		{"internal server", apperr.CodeInternalServer, http.StatusInternalServerError},
 		{"database error", apperr.CodeDatabaseError, http.StatusInternalServerError},
+		{"service unavailable override", apperr.CodeServiceUnavailable, http.StatusServiceUnavailable},
 		{"app-defined 404-range code", 44100, http.StatusNotFound},
 		{"app-defined conflict-range code", 49101, http.StatusConflict},
 		{"unlisted 2xx-range code", 20099, http.StatusOK},

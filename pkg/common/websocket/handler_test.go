@@ -370,3 +370,74 @@ func TestHandlerGlobalAndConnectionSlotsAreBounded(t *testing.T) {
 		t.Fatalf("max active = %d", maximum.Load())
 	}
 }
+
+func TestCanceledConnectionReleasesSlotWhileWaitingForGlobalCapacity(t *testing.T) {
+	options := mailboxOptions()
+	options.MaxInFlightHandlersPerConnection = 1
+	options.MaxInFlightHandlers = 1
+	hub, err := NewHub(testLogger(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	releaseHandler := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releaseHandler)
+	if err := On(hub, "handler.test.v1", func(ctx context.Context, connection *Conn, _ *handlerPayload) error {
+		if connection.ID() == "first" {
+			close(started)
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	hub.status = hubRunning
+	hub.runCtx = context.Background()
+	first := newUnitConnection(t, hub, "first", "user:first")
+	second := newUnitConnection(t, hub, "second", "user:second")
+
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- hub.dispatchApplication(first, handlerEnvelope("first", 1)) }()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("first handler did not acquire the global slot")
+	}
+
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- hub.dispatchApplication(second, handlerEnvelope("second", 2)) }()
+	waitForCondition(t, func() bool { return len(second.handlerSlots) == 1 })
+	select {
+	case err := <-secondDone:
+		t.Fatalf("second dispatch returned before its connection was canceled: %v", err)
+	default:
+	}
+
+	second.cancel()
+	select {
+	case err := <-secondDone:
+		if !errors.Is(err, ErrShuttingDown) {
+			t.Fatalf("second dispatch after cancel = %v; want shutdown rejection", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second dispatch remained blocked after its connection was canceled")
+	}
+	if len(second.handlerSlots) != 0 {
+		t.Fatal("canceled dispatch leaked its per-connection handler slot")
+	}
+
+	releaseHandler()
+	select {
+	case err := <-firstDone:
+		if err != nil {
+			t.Fatalf("first dispatch = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first dispatch did not finish after releasing its handler")
+	}
+}

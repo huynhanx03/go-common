@@ -2,6 +2,7 @@ package topk
 
 import (
 	"container/heap"
+	"math"
 	"math/rand"
 	"time"
 
@@ -62,13 +63,21 @@ func (h *topKHeap) Pop() any {
 	return item
 }
 
-// New creates a new HeavyKeepers instance.
+// New creates a new HeavyKeepers instance. It panics when k or width is zero,
+// or when decay is negative, greater than one, NaN, or infinite. Zero depth and
+// decay select their defaults.
 func New(k uint32, width uint32, depth uint32, decay float64) *HeavyKeepers {
+	if k == 0 || width == 0 {
+		panic("topk: k and width must be positive")
+	}
 	if depth == 0 {
 		depth = defaultDepth
 	}
 	if decay == 0 {
 		decay = defaultDecay
+	}
+	if math.IsNaN(decay) || math.IsInf(decay, 0) || decay < 0 || decay > 1 {
+		panic("topk: decay must be between 0 and 1")
 	}
 
 	rows := make([][]node, depth)

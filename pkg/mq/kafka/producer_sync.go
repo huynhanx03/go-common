@@ -16,7 +16,7 @@ type syncProducer struct {
 }
 
 // NewSyncProducer creates a new SyncProducer
-func NewSyncProducer(cfg *Config) (SyncProducer, error) {
+func NewSyncProducer(cfg *Config) (SyncProducerWithID, error) {
 	config := sarama.NewConfig()
 	config.ClientID = cfg.ClientID
 
@@ -43,7 +43,16 @@ func NewSyncProducer(cfg *Config) (SyncProducer, error) {
 // Publish sends a message and waits for acknowledgement.
 // Returns partition, offset, and error.
 func (sp *syncProducer) Publish(ctx context.Context, topic string, key, value []byte) (int32, int64, error) {
-	headers := buildHeaders(ctx)
+	return sp.publish(ctx, "", topic, key, value)
+}
+
+// PublishWithID sends a message carrying a stable producer-assigned message ID.
+func (sp *syncProducer) PublishWithID(ctx context.Context, topic, messageID string, key, value []byte) (int32, int64, error) {
+	return sp.publish(ctx, messageID, topic, key, value)
+}
+
+func (sp *syncProducer) publish(ctx context.Context, messageID, topic string, key, value []byte) (int32, int64, error) {
+	headers := buildHeadersWithID(ctx, messageID)
 
 	msg := &sarama.ProducerMessage{
 		Topic:   topic,

@@ -99,3 +99,40 @@ func TestCORSPreflightAndValidation(t *testing.T) {
 		t.Fatalf("allow methods = %q", recorder.Header().Get("Access-Control-Allow-Methods"))
 	}
 }
+
+func TestCORSWildcardAndRejectedPreflight(t *testing.T) {
+	t.Parallel()
+
+	middleware, err := CORS(CORSOptions{
+		AllowedOrigins: []string{"*"},
+		AllowedMethods: []string{http.MethodGet, http.MethodPost},
+		AllowedHeaders: []string{"X-Request-ID"},
+	})
+	if err != nil {
+		t.Fatalf("CORS: %v", err)
+	}
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(middleware)
+	router.Any("/", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.Header.Set("Origin", "https://client.example")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusNoContent || recorder.Header().Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatalf("wildcard origin response = %d, %q", recorder.Code, recorder.Header().Get("Access-Control-Allow-Origin"))
+	}
+
+	for _, headers := range []string{"X-Unknown", "bad header"} {
+		request := httptest.NewRequest(http.MethodOptions, "/", nil)
+		request.Header.Set("Origin", "https://client.example")
+		request.Header.Set("Access-Control-Request-Method", http.MethodPost)
+		request.Header.Set("Access-Control-Request-Headers", headers)
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusForbidden || recorder.Header().Get("Access-Control-Allow-Origin") != "" {
+			t.Errorf("preflight headers %q response = %d, allow-origin=%q", headers, recorder.Code, recorder.Header().Get("Access-Control-Allow-Origin"))
+		}
+	}
+}

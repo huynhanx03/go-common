@@ -136,6 +136,45 @@ func TestLookupBoundariesAndTopK(t *testing.T) {
 	}
 }
 
+func TestLookupNIntoHonorsAppendCountAndExistingCandidates(t *testing.T) {
+	r := mustRing(t, Options{VirtualNodes: 8})
+	if err := r.Replace([]Member[string]{{ID: "a"}, {ID: "b"}, {ID: "c"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := []Member[string]{{ID: "already-selected"}}
+	unchanged := r.LookupNHashInto(dst, 42, 0)
+	if len(unchanged) != 1 || unchanged[0].ID != "already-selected" {
+		t.Fatalf("zero candidate count changed destination: %+v", unchanged)
+	}
+
+	got := r.LookupNHashInto(dst, 42, 100)
+	if len(got) != 4 {
+		t.Fatalf("candidate count = %d, want destination plus all members: %+v", len(got), got)
+	}
+	seen := make(map[string]bool, len(got))
+	for _, member := range got {
+		if seen[member.ID] {
+			t.Fatalf("candidate %q was returned more than once", member.ID)
+		}
+		seen[member.ID] = true
+	}
+}
+
+func TestLookupNCoversSingletonAndEmptyRingDestinations(t *testing.T) {
+	r := mustRing(t, Options{VirtualNodes: 4})
+	dst := []Member[string]{{ID: "caller-value"}}
+	if got := r.LookupNHashInto(dst, 1, 1); len(got) != 1 || got[0].ID != "caller-value" {
+		t.Fatalf("empty ring candidates = %+v", got)
+	}
+	if err := r.Replace([]Member[string]{{ID: "only"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.LookupNHashInto(nil, 1, 5); len(got) != 1 || got[0].ID != "only" {
+		t.Fatalf("singleton candidates = %+v", got)
+	}
+}
+
 func TestLookupZeroAllocations(t *testing.T) {
 	r := mustRing(t, Options{VirtualNodes: 64})
 	if err := r.Replace([]Member[string]{{ID: "a"}, {ID: "b"}}); err != nil {

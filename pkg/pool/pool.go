@@ -62,7 +62,8 @@ func (p *Pool[T]) Get(size int) T {
 	return p.buckets[index].Get().(T)
 }
 
-// Put returns a value to the pool.
+// Put returns a value to the pool. Values whose reported size is smaller than
+// their size class are discarded so a later Get cannot receive an undersized value.
 func (p *Pool[T]) Put(value T) {
 	size := p.sizeFunc(value)
 	if size <= 0 {
@@ -71,6 +72,9 @@ func (p *Pool[T]) Put(value T) {
 
 	index := SizeToIndex(size)
 	if index >= sizeClasses {
+		return
+	}
+	if size < BucketSize(index) {
 		return
 	}
 

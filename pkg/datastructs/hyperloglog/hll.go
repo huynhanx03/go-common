@@ -1,6 +1,7 @@
 package hyperloglog
 
 import (
+	"errors"
 	"math"
 	"math/bits"
 
@@ -40,6 +41,9 @@ func (h *HLL) Add(hash uint64) bool {
 	// rho is the position of the leftmost 1-bit in the remaining 64-p bits.
 	// Shift w back to occupy the high bits so LeadingZeros64 works correctly.
 	rho := uint8(bits.LeadingZeros64(w<<p)) + 1
+	if max := uint8(64 - p + 1); rho > max {
+		rho = max
+	}
 
 	if rho > h.registers[idx] {
 		h.registers[idx] = rho
@@ -93,7 +97,21 @@ func (h *HLL) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON implements json.Unmarshaler.
 func (h *HLL) UnmarshalJSON(data []byte) error {
-	return json.Unmarshal(data, &h.registers)
+	var registers []uint8
+	if err := json.Unmarshal(data, &registers); err != nil {
+		return err
+	}
+	if len(registers) != m {
+		return errors.New("invalid hyperloglog register count")
+	}
+	maxRank := uint8(64 - p + 1)
+	for _, register := range registers {
+		if register > maxRank {
+			return errors.New("invalid hyperloglog register rank")
+		}
+	}
+	h.registers = registers
+	return nil
 }
 
 // Clone returns a deep copy of the HyperLogLog.

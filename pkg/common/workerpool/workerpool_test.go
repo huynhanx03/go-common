@@ -1,6 +1,7 @@
 package workerpool
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -139,5 +140,154 @@ func TestDefaultPoolSubmit(t *testing.T) {
 
 	if Running() < 0 || Cap() <= 0 {
 		t.Fatalf("Running() = %d, Cap() = %d", Running(), Cap())
+	}
+	if Free() < 0 || Free() > Cap() {
+		t.Fatalf("Free() = %d, Cap() = %d", Free(), Cap())
+	}
+}
+
+func TestDefaultPoolCanReleaseAndReboot(t *testing.T) {
+	Reboot()
+	var started sync.WaitGroup
+	started.Add(1)
+	if err := Submit(func() { started.Done() }); err != nil {
+		t.Fatalf("Submit before release: %v", err)
+	}
+	started.Wait()
+	if err := ReleaseTimeout(time.Second); err != nil {
+		t.Fatalf("ReleaseTimeout: %v", err)
+	}
+	if err := Submit(func() {}); !errors.Is(err, ErrPoolClosed) {
+		t.Fatalf("Submit after release = %v, want closed pool", err)
+	}
+
+	Reboot()
+	var rebooted sync.WaitGroup
+	rebooted.Add(1)
+	if err := Submit(func() { rebooted.Done() }); err != nil {
+		t.Fatalf("Submit after reboot: %v", err)
+	}
+	rebooted.Wait()
+	Release()
+	if err := Submit(func() {}); !errors.Is(err, ErrPoolClosed) {
+		t.Fatalf("Submit after Release = %v, want closed pool", err)
+	}
+	Reboot()
+	if err := ReleaseContext(context.Background()); err != nil {
+		t.Fatalf("ReleaseContext: %v", err)
+	}
+	Reboot()
+}
+
+func TestPoolFuncInvokesHandlerAndValidatesBoundedOperations(t *testing.T) {
+	values := make(chan any, 1)
+	pool, err := NewPoolFunc(1, func(value any) { values <- value })
+	if err != nil {
+		t.Fatalf("NewPoolFunc: %v", err)
+	}
+	if err := pool.Invoke("job-1"); err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	select {
+	case got := <-values:
+		if got != "job-1" {
+			t.Fatalf("handler value = %v", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("handler was not invoked")
+	}
+	if err := pool.ReleaseTimeout(time.Second); err != nil {
+		t.Fatalf("ReleaseTimeout: %v", err)
+	}
+	if err := pool.InvokeContext(context.Background(), "after-release"); !errors.Is(err, ErrPoolClosed) {
+		t.Fatalf("Invoke after release = %v, want closed pool", err)
+	}
+	if _, err := NewPoolFunc(1, nil); !errors.Is(err, ErrLackPoolFunc) {
+		t.Fatalf("nil handler error = %v, want ErrLackPoolFunc", err)
+	}
+}
+
+func TestPoolReleaseMethodsRejectInvalidBounds(t *testing.T) {
+	pool, err := NewPool(1)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	if err := pool.ReleaseTimeout(0); !errors.Is(err, ErrInvalidPoolOptions) {
+		t.Fatalf("ReleaseTimeout(0) = %v, want invalid options", err)
+	}
+	if err := pool.ReleaseContext(nil); !errors.Is(err, ErrInvalidPoolOptions) {
+		t.Fatalf("ReleaseContext(nil) = %v, want invalid options", err)
+	}
+	pool.Release()
+	if err := pool.SubmitContext(nil, func() {}); !errors.Is(err, ErrInvalidTask) {
+		t.Fatalf("SubmitContext(nil) = %v, want invalid task", err)
+	}
+}
+
+func TestPoolReleaseMethodsDrainEachPoolType(t *testing.T) {
+	pool, err := NewPool(1)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	if err := pool.ReleaseContext(context.Background()); err != nil {
+		t.Fatalf("Pool.ReleaseContext: %v", err)
+	}
+
+	functionPool, err := NewPoolFunc(1, func(any) {})
+	if err != nil {
+		t.Fatalf("NewPoolFunc: %v", err)
+	}
+	if err := functionPool.ReleaseContext(context.Background()); err != nil {
+		t.Fatalf("PoolFunc.ReleaseContext: %v", err)
+	}
+
+	genericPool, err := NewGenericPool(1, func(int) {})
+	if err != nil {
+		t.Fatalf("NewGenericPool: %v", err)
+	}
+	if err := genericPool.ReleaseTimeout(time.Second); err != nil {
+		t.Fatalf("GenericPool.ReleaseTimeout: %v", err)
+	}
+}
+
+func TestMultiPoolAndMultiPoolFuncDispatch(t *testing.T) {
+	var count atomic.Int64
+	var wait sync.WaitGroup
+	pool, err := NewMultiPool(2, 1, RoundRobin)
+	if err != nil {
+		t.Fatalf("NewMultiPool: %v", err)
+	}
+	for range 8 {
+		wait.Add(1)
+		if err := pool.Submit(func() { count.Add(1); wait.Done() }); err != nil {
+			t.Fatalf("MultiPool.Submit: %v", err)
+		}
+	}
+	wait.Wait()
+	if err := pool.ReleaseTimeout(time.Second); err != nil {
+		t.Fatalf("MultiPool.ReleaseTimeout: %v", err)
+	}
+	if got := count.Load(); got != 8 {
+		t.Fatalf("MultiPool completed %d tasks, want 8", got)
+	}
+
+	values := make(chan any, 1)
+	functionPool, err := NewMultiPoolFunc(2, 1, func(value any) { values <- value }, RoundRobin)
+	if err != nil {
+		t.Fatalf("NewMultiPoolFunc: %v", err)
+	}
+	if err := functionPool.Invoke("payload"); err != nil {
+		t.Fatalf("MultiPoolFunc.Invoke: %v", err)
+	}
+	select {
+	case got := <-values:
+		if got != "payload" {
+			t.Fatalf("MultiPoolFunc value = %v", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("MultiPoolFunc did not dispatch payload")
+	}
+	if err := functionPool.ReleaseTimeout(time.Second); err != nil {
+		t.Fatalf("MultiPoolFunc.ReleaseTimeout: %v", err)
 	}
 }

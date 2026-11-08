@@ -687,25 +687,41 @@ func TestDeleteBelow_Sequence(t *testing.T) {
 	}
 }
 
-func TestDeleteBelow_FreesPages(t *testing.T) {
+func TestDeleteBelowReusesReclaimedPagesAndPreservesSurvivors(t *testing.T) {
 	tree := NewTree()
 	defer tree.Close()
 
-	// Insert many keys to create multiple pages
+	const lastKey = uint64(500)
 	for i := uint64(1); i <= 500; i++ {
-		tree.Set(i, i) // value = key
+		tree.Set(i, i)
 	}
-
 	statsBefore := tree.Stats()
-
-	// Delete half the entries
 	tree.DeleteBelow(250)
-
 	statsAfter := tree.Stats()
 	if statsAfter.NumPagesFree <= statsBefore.NumPagesFree {
-		t.Logf("NumPagesFree: before=%d, after=%d",
-			statsBefore.NumPagesFree, statsAfter.NumPagesFree)
-		// This is expected behavior - pages may be reused
+		t.Fatalf("DeleteBelow reclaimed no pages: before=%+v after=%+v", statsBefore, statsAfter)
+	}
+	for key := uint64(1); key < 250; key++ {
+		if got := tree.Get(key); got != 0 {
+			t.Fatalf("expired key %d has value %d", key, got)
+		}
+	}
+	for key := uint64(250); key <= lastKey; key++ {
+		if got := tree.Get(key); got != key {
+			t.Fatalf("surviving key %d has value %d", key, got)
+		}
+	}
+
+	for key := lastKey + 1; key <= lastKey+250; key++ {
+		tree.Set(key, key)
+	}
+	if got := tree.Stats().NumPagesFree; got >= statsAfter.NumPagesFree {
+		t.Fatalf("new inserts did not reuse reclaimed pages: free pages before=%d after=%d", statsAfter.NumPagesFree, got)
+	}
+	for key := lastKey + 1; key <= lastKey+250; key++ {
+		if got := tree.Get(key); got != key {
+			t.Fatalf("reused page lost key %d: got %d", key, got)
+		}
 	}
 }
 

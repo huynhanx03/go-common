@@ -131,6 +131,9 @@ func NewLinearBackoff(initial, max time.Duration) *LinearBackoff {
 }
 
 func (b *LinearBackoff) Delay(attempt int) time.Duration {
+	if attempt >= 0 && int64(attempt) >= int64(b.max/b.initial) {
+		return b.max
+	}
 	d := b.initial * time.Duration(attempt+1)
 	if d > b.max {
 		return b.max
@@ -163,10 +166,14 @@ func NewExponentialBackoff(initial, max time.Duration, multiplier float64) *Expo
 
 func (b *ExponentialBackoff) Delay(attempt int) time.Duration {
 	d := float64(b.initial) * math.Pow(b.multiplier, float64(attempt))
-	if d > float64(b.max) {
+	if d > float64(b.max) || d >= float64(math.MaxInt64) {
 		return b.max
 	}
-	return time.Duration(d)
+	delay := time.Duration(d)
+	if delay > b.max {
+		return b.max
+	}
+	return delay
 }
 
 // -- Jitter Backoff --

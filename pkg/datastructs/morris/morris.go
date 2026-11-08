@@ -5,8 +5,7 @@ import (
 	"time"
 )
 
-// Morris represents a Morris Counter.
-// It uses a single uint8 to estimate counts up to 2^255 (though limited by float64 precision).
+// Morris represents a Morris counter with an estimate bounded by uint64.
 type Morris struct {
 	value uint8
 	rnd   *rand.Rand
@@ -23,6 +22,9 @@ func New() *Morris {
 // Increment increments the counter probabilistically.
 // Probability of incrementing is 1 / 2^value.
 func (m *Morris) Increment() bool {
+	if m.value >= 64 {
+		return false
+	}
 	p := 1.0 / float64(uint64(1)<<m.value)
 	if m.rnd.Float64() < p {
 		m.value++
@@ -31,11 +33,13 @@ func (m *Morris) Increment() bool {
 	return false
 }
 
-// Count returns the estimated count.
-// Estimate = 2^value - 1.
+// Count returns the estimated count, saturating at the uint64 maximum.
 func (m *Morris) Count() uint64 {
 	if m.value == 0 {
 		return 0
+	}
+	if m.value >= 64 {
+		return ^uint64(0)
 	}
 	return (1 << m.value) - 1
 }
@@ -52,5 +56,8 @@ func (m *Morris) RawValue() uint8 {
 
 // SetRawValue sets the raw register value (e.g. for loading from storage).
 func (m *Morris) SetRawValue(v uint8) {
+	if v > 64 {
+		v = 64
+	}
 	m.value = v
 }

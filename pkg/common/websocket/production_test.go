@@ -23,6 +23,8 @@ type orderedTransport struct {
 	reads       chan transportRead
 	writeNotify chan struct{}
 	closeNotify chan CloseOptions
+	writeError  error
+	pingError   error
 
 	mu              sync.Mutex
 	writes          [][]byte
@@ -60,6 +62,9 @@ func (transport *orderedTransport) Write(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if transport.writeError != nil {
+		return transport.writeError
+	}
 	transport.mu.Lock()
 	transport.activeWriters++
 	if transport.activeWriters > transport.maximumWriters {
@@ -75,7 +80,12 @@ func (transport *orderedTransport) Write(
 	return nil
 }
 
-func (*orderedTransport) Ping(context.Context) error { return nil }
+func (transport *orderedTransport) Ping(ctx context.Context) error {
+	if transport.pingError != nil {
+		return transport.pingError
+	}
+	return ctx.Err()
+}
 
 func (transport *orderedTransport) Close(code int, reason string) error {
 	transport.closeOnce.Do(func() {
@@ -112,6 +122,50 @@ func attachOrderedConnection(
 	}
 	t.Fatal("attached connection was not indexed")
 	return nil
+}
+
+func attachPumpConnection(
+	t *testing.T,
+	options Options,
+	principal authentication.Principal,
+	transport *orderedTransport,
+) (*Hub, *Conn) {
+	t.Helper()
+
+	hub := newUnitHub(t, options)
+	runContext, cancelRun := context.WithCancel(context.Background())
+	hub.runCtx = runContext
+	hub.runCancel = cancelRun
+	if err := hub.attachConnection(
+		context.Background(),
+		principal,
+		"192.0.2.44",
+		func(context.Context, authentication.Principal, string) error { return nil },
+		transport,
+	); err != nil {
+		cancelRun()
+		t.Fatalf("attachConnection: %v", err)
+	}
+	hub.mu.RLock()
+	var connection *Conn
+	for _, current := range hub.state.connections {
+		if current.principal.Subject == principal.Subject {
+			connection = current
+			break
+		}
+	}
+	hub.mu.RUnlock()
+	if connection == nil {
+		t.Fatal("attached connection was not indexed")
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := hub.Shutdown(ctx); err != nil {
+			t.Errorf("Shutdown: %v", err)
+		}
+	})
+	return hub, connection
 }
 
 func TestWriterPumpPreservesOrderAndUsesOneWriter(t *testing.T) {
@@ -168,6 +222,207 @@ func TestWriterPumpPreservesOrderAndUsesOneWriter(t *testing.T) {
 	defer cancel()
 	if err := hub.Shutdown(ctx); err != nil {
 		t.Fatalf("Shutdown: %v", err)
+	}
+}
+
+func TestReadPumpDispatchesEventsAnswersPingAndRejectsBinaryFrames(t *testing.T) {
+	t.Parallel()
+
+	options := validHubOptions()
+	hub, err := NewHub(testLogger(), options)
+	if err != nil {
+		t.Fatalf("NewHub: %v", err)
+	}
+	handled := make(chan handlerPayload, 1)
+	if err := On(hub, "handler.test.v1", func(
+		_ context.Context,
+		_ *Conn,
+		message *handlerPayload,
+	) error {
+		handled <- *message
+		return nil
+	}); err != nil {
+		t.Fatalf("On: %v", err)
+	}
+	runContext, cancelRun := context.WithCancel(context.Background())
+	hub.status = hubRunning
+	hub.runCtx = runContext
+	hub.runCancel = cancelRun
+	transport := newOrderedTransport()
+	if err := hub.attachConnection(
+		context.Background(),
+		authenticatedPrincipal("user:read-pump"),
+		"192.0.2.44",
+		func(context.Context, authentication.Principal, string) error { return nil },
+		transport,
+	); err != nil {
+		cancelRun()
+		t.Fatalf("attachConnection: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := hub.Shutdown(ctx); err != nil {
+			t.Errorf("Shutdown: %v", err)
+		}
+	})
+
+	ping, err := EncodeEnvelope(Envelope{
+		Version: ProtocolVersion, Operation: OperationPing,
+		ID: "ping-1", Type: ProtocolTypePing,
+	}, options.MaxOutboundMessageBytes)
+	if err != nil {
+		t.Fatalf("EncodeEnvelope ping: %v", err)
+	}
+	transport.reads <- transportRead{payload: ping, text: true}
+	select {
+	case <-transport.writeNotify:
+	case <-time.After(time.Second):
+		t.Fatal("ping did not produce a response")
+	}
+	transport.mu.Lock()
+	pongFrame := append([]byte(nil), transport.writes[0]...)
+	transport.mu.Unlock()
+	var pong Envelope
+	if err := json.Unmarshal(pongFrame, &pong); err != nil {
+		t.Fatalf("decode pong: %v", err)
+	}
+	if pong.Operation != OperationPong || pong.ID != "ping-1" {
+		t.Fatalf("pong = %+v; want matching pong response", pong)
+	}
+
+	transport.reads <- transportRead{payload: []byte("{"), text: true}
+	select {
+	case <-transport.writeNotify:
+	case <-time.After(time.Second):
+		t.Fatal("malformed frame did not produce a protocol error")
+	}
+	transport.mu.Lock()
+	protocolErrorFrame := append([]byte(nil), transport.writes[1]...)
+	transport.mu.Unlock()
+	var protocolError Envelope
+	if err := json.Unmarshal(protocolErrorFrame, &protocolError); err != nil {
+		t.Fatalf("decode protocol error: %v", err)
+	}
+	var protocolErrorData struct {
+		Code      ErrorCode `json:"code"`
+		Retryable bool      `json:"retryable"`
+	}
+	if protocolError.Operation != OperationError ||
+		json.Unmarshal(protocolError.Data, &protocolErrorData) != nil ||
+		protocolErrorData.Code != CodeInvalidMessage || protocolErrorData.Retryable {
+		t.Fatalf("malformed frame response = %+v data=%s", protocolError, protocolError.Data)
+	}
+
+	data, err := json.Marshal(handlerPayload{Key: "account-1", Value: 42})
+	if err != nil {
+		t.Fatalf("marshal handler payload: %v", err)
+	}
+	event, err := EncodeEnvelope(Envelope{
+		Version: ProtocolVersion, Operation: OperationEvent,
+		ID: "event-1", Type: "handler.test.v1", Data: data,
+	}, options.MaxOutboundMessageBytes)
+	if err != nil {
+		t.Fatalf("EncodeEnvelope event: %v", err)
+	}
+	transport.reads <- transportRead{payload: event, text: true}
+	select {
+	case got := <-handled:
+		if got != (handlerPayload{Key: "account-1", Value: 42}) {
+			t.Fatalf("handled event = %+v", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("application event was not dispatched")
+	}
+
+	transport.reads <- transportRead{payload: []byte("binary"), text: false}
+	select {
+	case closeOptions := <-transport.closeNotify:
+		if closeOptions.Code != CloseUnsupportedData {
+			t.Fatalf("binary frame close = %+v; want unsupported data", closeOptions)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("binary frame did not close the connection")
+	}
+	if got := hub.Metrics(); got.InboundAccepted != 2 || got.InboundInvalid != 2 {
+		t.Fatalf("inbound metrics = %+v; want two accepted and two invalid", got)
+	}
+}
+
+func TestWriterPumpClosesExpiredAuthenticatedConnection(t *testing.T) {
+	t.Parallel()
+
+	principal := authenticatedPrincipal("user:expired-pump")
+	principal.AuthenticatedUntil = time.Now().Add(-time.Second)
+	transport := newOrderedTransport()
+	hub, _ := attachPumpConnection(t, validHubOptions(), principal, transport)
+	select {
+	case closeOptions := <-transport.closeNotify:
+		if closeOptions.Code != CloseAuthenticationGone {
+			t.Fatalf("expired principal close = %+v; want authentication-expired", closeOptions)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expired principal connection remained open")
+	}
+	if got := hub.Metrics().Closes.Auth; got != 1 {
+		t.Fatalf("authentication close metric = %d; want 1", got)
+	}
+}
+
+func TestWriterPumpReportsPingFailureAndClosesConnection(t *testing.T) {
+	t.Parallel()
+
+	options := validHubOptions()
+	options.PingInterval = 20 * time.Millisecond
+	options.PongTimeout = 5 * time.Millisecond
+	transport := newOrderedTransport()
+	transport.pingError = errors.New("ping failed")
+	hub, _ := attachPumpConnection(
+		t,
+		options,
+		authenticatedPrincipal("user:ping-failure"),
+		transport,
+	)
+	select {
+	case closeOptions := <-transport.closeNotify:
+		if closeOptions.Code != CloseInternalError {
+			t.Fatalf("ping failure close = %+v; want internal error", closeOptions)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ping failure did not close the connection")
+	}
+	if got := hub.Metrics().OutboundErrors; got != 1 {
+		t.Fatalf("outbound errors = %d; want one failed ping", got)
+	}
+}
+
+func TestWriterPumpClosesConnectionAfterWriteFailure(t *testing.T) {
+	t.Parallel()
+
+	transport := newOrderedTransport()
+	transport.writeError = errors.New("write failed")
+	hub, connection := attachPumpConnection(
+		t,
+		validHubOptions(),
+		authenticatedPrincipal("user:write-failure"),
+		transport,
+	)
+	if err := connection.Send(
+		context.Background(),
+		outboundMessage(DeliveryCritical, "", "important"),
+	); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	select {
+	case closeOptions := <-transport.closeNotify:
+		if closeOptions.Code != CloseInternalError {
+			t.Fatalf("write failure close = %+v; want internal error", closeOptions)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("write failure did not close the connection")
+	}
+	if got := hub.Metrics().OutboundErrors; got != 1 {
+		t.Fatalf("outbound errors = %d; want one failed write", got)
 	}
 }
 

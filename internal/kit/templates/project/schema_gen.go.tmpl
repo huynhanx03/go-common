@@ -1,0 +1,10 @@
+package main
+
+import "context"
+
+func desiredSchema(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return "", nil
+}

@@ -30,11 +30,13 @@ architecture:
 | Capability | Packages |
 |---|---|
 | Process foundation | `pkg/common/lifecycle`, `pkg/common/health`, `pkg/common/observability`, `pkg/logger`, `pkg/settings` |
+| Durable orchestration | `pkg/workflow/temporal`, `pkg/mq/outbox/temporal` |
+| Distributed ownership and resumable jobs | `pkg/coordination`, `pkg/coordination/etcd`, `pkg/database/redis`, `pkg/workflow/batch` |
 | Security | `pkg/security/authentication`, `pkg/security/authorization`, `pkg/security/password`, `pkg/oauth` |
 | Transports | `pkg/common/http/...`, `pkg/common/grpc/...`, `pkg/common/websocket` |
 | Data boundaries | `pkg/common/tx`, `pkg/database/...`, `pkg/cdc` |
 | Feature flags | `pkg/toggle`, `pkg/toggle/gin`, `pkg/toggle/unleash`, `pkg/toggle/ent` |
-| Messaging | `pkg/mq/forge`, `pkg/mq/outbox`, `pkg/mq/batcher`, `pkg/mq/kafka` |
+| Messaging | `pkg/mq/forge`, `pkg/mq/outbox`, `pkg/mq/consumer`, `pkg/mq/kafka` |
 | Reusable core | `pkg/bytes`, `pkg/stream`, `pkg/encoding/...`, `pkg/dto`, `pkg/unique`, `pkg/datastructs/...`, `pkg/pool/...`, `pkg/consistenthash` |
 
 Application repositories remain responsible for:
@@ -65,6 +67,7 @@ Production-facing packages follow the same rules:
 
 ## Documentation
 
+- [comxkit project scaffolder](docs/comxkit.md)
 - [v0 to v1 migration](docs/migration-v0-to-v1.md)
 - [Security model](docs/security.md)
 - [Lifecycle and health](docs/lifecycle.md)
@@ -72,6 +75,12 @@ Production-facing packages follow the same rules:
 - [gRPC server](docs/grpc.md)
 - [WebSocket operations](docs/websocket.md)
 - [Durable outbox relay](docs/outbox.md)
+- [Temporal client, workers, and durable schedules](pkg/workflow/temporal/README.md)
+- [Outbox to Temporal workflow starts](pkg/mq/outbox/temporal/README.md)
+- [Shared cache tiers](pkg/common/cache/README.md)
+- [Distributed lease lifecycle](pkg/coordination/README.md)
+- [Distributed leases and fencing with etcd](pkg/coordination/etcd/README.md)
+- [Batch checkpoint Ent mixin](pkg/workflow/batch/ent/README.md)
 - [Benchmark operations](docs/benchmarks.md)
 - [Consistent-hash placement](docs/consistenthash.md)
 - [Feature flags and Ent integration](pkg/toggle/README.md)
@@ -83,8 +92,8 @@ Production-facing packages follow the same rules:
 ```text
 go-common/
 ├── pkg/       # Public capability packages
-├── internal/  # Reserved for future private shared implementation
-├── cmd/       # Reserved for future executable commands
+├── internal/  # Private implementations, including the comxkit generator
+├── cmd/       # Executable commands, including comxkit
 ├── docs/      # Compatibility and operating contracts
 ├── scripts/   # Deterministic local/CI entry points
 └── .github/   # Continuous-integration workflows

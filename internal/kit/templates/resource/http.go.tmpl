@@ -1,0 +1,123 @@
+package {{.Name}}
+
+import (
+	"context"
+	"github.com/gin-gonic/gin"
+{{if or .Get .Delete .Update}}
+	"github.com/google/uuid"
+	"github.com/huynhanx03/go-common/pkg/common/apperr"
+{{end}}
+	genent "{{.Module}}/ent"
+	"github.com/huynhanx03/go-common/pkg/common/http/handler"
+	{{if or .Find .Create .Update .Delete .CreateBulk .UpdateBulk .DeleteBulk}}
+	"github.com/huynhanx03/go-common/pkg/common/http/response"
+	{{end}}
+)
+
+type Dependencies struct {
+	Client *genent.Client
+	{{if or .GetBulk .CreateBulk .UpdateBulk .UpsertBulk .DeleteBulk}}
+	Config ServiceConfig
+	{{end}}
+}
+
+func Register(router *gin.RouterGroup, dependencies Dependencies) {
+	{{if or .GetBulk .CreateBulk .UpdateBulk .UpsertBulk .DeleteBulk}}
+	service := NewService(NewRepository(dependencies.Client), dependencies.Config)
+	{{else}}
+	service := NewService(NewRepository(dependencies.Client))
+	{{end}}
+{{if .Find}}
+	router.POST("/find", handler.Wrap(func(ctx context.Context, input *FindInput) (*response.Reply, error) {
+		page, err := service.Find(ctx, *input)
+		if err != nil {
+			return nil, err
+		}
+		return response.Paginated(*page.Records, page.Pagination), nil
+	}))
+{{end}}
+{{if .Get}}
+	router.GET("/:id", handler.Wrap(func(ctx context.Context, input *IDInput) (Model, error) {
+		id, err := uuid.Parse(input.ID)
+		if err != nil {
+			return Model{}, apperr.New(apperr.CodeParamInvalid, "invalid id", err)
+		}
+		return service.Get(ctx, id)
+	}))
+{{end}}
+{{if .Create}}
+	router.POST("", handler.Wrap(func(ctx context.Context, input *CreateInput) (*response.Reply, error) {
+		model, err := service.Create(ctx, *input)
+		if err != nil {
+			return nil, err
+		}
+		return response.Created(model), nil
+	}))
+{{end}}
+{{if .Upsert}}
+	router.PUT("/upsert", handler.Wrap(func(ctx context.Context, input *UpsertInput) (Model, error) {
+		return service.Upsert(ctx, *input)
+	}))
+{{end}}
+{{if .Update}}
+	router.PATCH("/:id", handler.Wrap(func(ctx context.Context, input *UpdateInput) (*response.Reply, error) {
+		id, err := uuid.Parse(input.ID)
+		if err != nil {
+			return nil, apperr.New(apperr.CodeParamInvalid, "invalid id", err)
+		}
+		model, err := service.Update(ctx, id, *input)
+		if err != nil {
+			return nil, err
+		}
+		return response.Updated(model), nil
+	}))
+{{end}}
+{{if .Delete}}
+	router.DELETE("/:id", handler.Wrap(func(ctx context.Context, input *IDInput) (*response.Reply, error) {
+		id, err := uuid.Parse(input.ID)
+		if err != nil {
+			return nil, apperr.New(apperr.CodeParamInvalid, "invalid id", err)
+		}
+		if err := service.Delete(ctx, id); err != nil {
+			return nil, err
+		}
+		return response.Deleted(nil), nil
+	}))
+{{end}}
+{{if .GetBulk}}
+	router.POST("/get-bulk", handler.Wrap(func(ctx context.Context, input *GetBulkInput) ([]Model, error) {
+		return service.GetBulk(ctx, input.IDs)
+	}))
+{{end}}
+{{if .CreateBulk}}
+	router.POST("/create-bulk", handler.Wrap(func(ctx context.Context, input *CreateBulkInput) (*response.Reply, error) {
+		models, err := service.CreateBulk(ctx, input.Items)
+		if err != nil {
+			return nil, err
+		}
+		return response.Created(models), nil
+	}))
+{{end}}
+{{if .UpdateBulk}}
+	router.POST("/update-bulk", handler.Wrap(func(ctx context.Context, input *UpdateBulkInput) (*response.Reply, error) {
+		models, err := service.UpdateBulk(ctx, input.Items)
+		if err != nil {
+			return nil, err
+		}
+		return response.Updated(models), nil
+	}))
+{{end}}
+{{if .UpsertBulk}}
+	router.POST("/upsert-bulk", handler.Wrap(func(ctx context.Context, input *UpsertBulkInput) ([]Model, error) {
+		return service.UpsertBulk(ctx, input.Items)
+	}))
+{{end}}
+{{if .DeleteBulk}}
+	router.POST("/delete-bulk", handler.Wrap(func(ctx context.Context, input *DeleteBulkInput) (*response.Reply, error) {
+		if err := service.DeleteBulk(ctx, input.IDs); err != nil {
+			return nil, err
+		}
+		return response.Deleted(nil), nil
+	}))
+{{end}}
+}

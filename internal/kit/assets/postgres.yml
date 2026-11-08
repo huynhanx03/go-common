@@ -1,0 +1,26 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-go_common}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  postgres-tools:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_TOOLS_DB:-atlas_dev}
+      POSTGRES_USER: ${POSTGRES_TOOLS_USER:-atlas}
+      POSTGRES_PASSWORD: ${POSTGRES_TOOLS_PASSWORD:-atlas}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s

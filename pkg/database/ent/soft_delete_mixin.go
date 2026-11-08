@@ -57,19 +57,11 @@ func (SoftDeleteMixin) P(w SoftDeleteQuery) {
 	)
 }
 
-// Interceptors hide soft-deleted rows from every query.
-func (d SoftDeleteMixin) Interceptors() []ent.Interceptor {
-	return []ent.Interceptor{
-		ent.TraverseFunc(func(ctx context.Context, q ent.Query) error {
-			// Skip soft-delete, means include soft-deleted entities.
-			if IsSkipSoftDelete(ctx) {
-				return nil
-			}
-			if w, ok := q.(SoftDeleteQuery); ok {
-				d.P(w)
-			}
-			return nil
-		}),
+// FilterQuery hides soft-deleted rows from a generated Ent query adapter.
+// The adapter is generated per project because Ent query builders are schema-specific.
+func (d SoftDeleteMixin) FilterQuery(ctx context.Context, query SoftDeleteQuery) {
+	if !IsSkipSoftDelete(ctx) {
+		d.P(query)
 	}
 }
 

@@ -137,8 +137,11 @@ func (sw *SlidingWindow) advance() {
 func (sw *SlidingWindow) estimate() float64 {
 	now := sw.now()
 	elapsed := now - sw.currStart
-	if elapsed <= 0 {
-		return float64(sw.currCount)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	if elapsed == 0 {
+		return float64(sw.prevCount + sw.currCount)
 	}
 
 	// Weight: how much of the previous window is still relevant

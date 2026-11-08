@@ -2,6 +2,7 @@ package buffer
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -606,4 +607,84 @@ func TestRing_Bytes(t *testing.T) {
 	if string(head) == "Xello" {
 		t.Error("Bytes() returned reference, not copy")
 	}
+}
+
+func TestRingWrappedViewsAndWriterDrainPreserveFIFOOrder(t *testing.T) {
+	rb := NewRing(8)
+	if _, err := rb.WriteString("abcdef"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rb.Read(make([]byte, 4)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rb.WriteString("ghij"); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []byte("efghij")
+	head, tail := rb.Peek(0)
+	view := append(append([]byte(nil), head...), tail...)
+	if !bytes.Equal(view, want) || !bytes.Equal(rb.Bytes(), want) {
+		t.Fatalf("wrapped views = %q / %q, want %q", view, rb.Bytes(), want)
+	}
+	if rb.Buffered() != len(want) {
+		t.Fatalf("read-only views consumed bytes: buffered=%d", rb.Buffered())
+	}
+
+	var output bytes.Buffer
+	written, err := rb.WriteTo(&output)
+	if err != nil || written != int64(len(want)) || !bytes.Equal(output.Bytes(), want) {
+		t.Fatalf("WriteTo = (%d, %v, %q), want full FIFO payload", written, err, output.Bytes())
+	}
+	if !rb.IsEmpty() {
+		t.Fatal("successful WriteTo did not drain the ring")
+	}
+}
+
+func TestRingReadFromAppendsInWrappedFreeSpaceAndKeepsUnreadDataOnWriterError(t *testing.T) {
+	rb := NewRing(1024)
+	initial := bytes.Repeat([]byte("a"), 1000)
+	if _, err := rb.Write(initial); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rb.Read(make([]byte, 900)); err != nil {
+		t.Fatal(err)
+	}
+	wrapped := bytes.Repeat([]byte("b"), 100)
+	if _, err := rb.Write(wrapped); err != nil {
+		t.Fatal(err)
+	}
+	appended := []byte("xyz")
+	if n, err := rb.ReadFrom(bytes.NewReader(appended)); err != nil || n != int64(len(appended)) {
+		t.Fatalf("ReadFrom = (%d, %v), want %d bytes", n, err, len(appended))
+	}
+	want := append(bytes.Repeat([]byte("a"), 100), wrapped...)
+	want = append(want, appended...)
+	got := make([]byte, len(want))
+	if n, err := io.ReadFull(rb, got); err != nil || n != len(want) || !bytes.Equal(got, want) {
+		t.Fatalf("FIFO data after ReadFrom = (%d, %v, %q), want %q", n, err, got, want)
+	}
+
+	rb = NewRing(8)
+	_, _ = rb.WriteString("abcdef")
+	_, _ = rb.Read(make([]byte, 4))
+	_, _ = rb.WriteString("ghij")
+	writer := &limitedErrorWriter{limit: 2, err: io.ErrShortWrite}
+	if n, err := rb.WriteTo(writer); n != 2 || !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("partial wrapped WriteTo = (%d, %v), want short write", n, err)
+	}
+	remaining := make([]byte, rb.Buffered())
+	if n, err := io.ReadFull(rb, remaining); err != nil || n != 4 || string(remaining) != "ghij" {
+		t.Fatalf("unwritten suffix = (%d, %v, %q), want ghij", n, err, remaining)
+	}
+}
+
+type limitedErrorWriter struct {
+	limit int
+	err   error
+}
+
+func (writer *limitedErrorWriter) Write(data []byte) (int, error) {
+	n := min(len(data), writer.limit)
+	return n, writer.err
 }

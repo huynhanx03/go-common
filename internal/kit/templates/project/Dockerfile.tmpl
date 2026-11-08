@@ -1,0 +1,36 @@
+FROM golang:{{.GoVersion}}-alpine AS build
+
+ARG GOPROXY=https://proxy.golang.org,direct
+ARG GOPRIVATE
+ARG GONOSUMDB
+ENV GOPROXY=${GOPROXY}
+ENV GOPRIVATE=${GOPRIVATE}
+ENV GONOSUMDB=${GONOSUMDB}
+
+WORKDIR /src
+COPY . .
+RUN go mod download
+RUN if find ent/schema -maxdepth 1 -type f -name '*.go' -print -quit | grep -q .; then go generate ./ent; fi
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/server ./cmd/server
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/migrate ./cmd/migrate
+
+FROM arigaio/atlas:{{.AtlasVersion}} AS atlas
+
+FROM alpine:3.23 AS runtime
+RUN apk add --no-cache ca-certificates tzdata
+WORKDIR /app
+RUN addgroup -S app && adduser -S -G app app
+USER app
+
+FROM runtime AS api
+COPY --from=build --chown=app:app /out/server /app/server
+EXPOSE 8080
+ENTRYPOINT ["/app/server"]
+
+FROM runtime AS migrator
+COPY --from=atlas /atlas /usr/local/bin/atlas
+COPY --from=build --chown=app:app /out/migrate /app/migrate
+COPY --chown=app:app migrations /app/migrations
+COPY --chown=app:app atlas.hcl /app/atlas.hcl
+ENV ATLAS_BIN=/usr/local/bin/atlas
+ENTRYPOINT ["/app/migrate"]

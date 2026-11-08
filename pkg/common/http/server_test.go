@@ -373,6 +373,107 @@ func TestServerUnexpectedServeErrorLeavesDrainToExplicitShutdown(t *testing.T) {
 	}
 }
 
+func TestConcurrentShutdownCallsShareTheSameDrain(t *testing.T) {
+	t.Parallel()
+
+	listener := newPipeListener()
+	requestEntered := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseRequest) }) }
+	handler := stdhttp.HandlerFunc(func(writer stdhttp.ResponseWriter, _ *stdhttp.Request) {
+		close(requestEntered)
+		<-releaseRequest
+		writer.WriteHeader(stdhttp.StatusNoContent)
+	})
+	server, err := newServer(handler, validServerOptions(), listener)
+	if err != nil {
+		release()
+		_ = listener.Close()
+		t.Fatalf("newServer: %v", err)
+	}
+	shutdownStarted := make(chan struct{})
+	server.server.RegisterOnShutdown(func() { close(shutdownStarted) })
+	defer func() {
+		release()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = server.Shutdown(ctx)
+		_ = listener.Close()
+	}()
+
+	client := &stdhttp.Client{
+		Transport: &stdhttp.Transport{Proxy: nil, DialContext: listener.DialContext},
+		Timeout:   2 * time.Second,
+	}
+	defer client.CloseIdleConnections()
+	runResult := make(chan error, 1)
+	go func() { runResult <- server.Run(context.Background()) }()
+	requestResult := make(chan error, 1)
+	go func() {
+		response, requestErr := client.Get("http://server.test/block")
+		if response != nil {
+			_ = response.Body.Close()
+		}
+		requestResult <- requestErr
+	}()
+	select {
+	case <-requestEntered:
+	case <-time.After(time.Second):
+		t.Fatal("request did not enter handler")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	firstShutdown := make(chan error, 1)
+	go func() { firstShutdown <- server.Shutdown(ctx) }()
+	select {
+	case <-shutdownStarted:
+	case err := <-firstShutdown:
+		t.Fatalf("first Shutdown returned before starting server drain: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("first Shutdown did not begin the server drain")
+	}
+
+	secondShutdown := make(chan error, 1)
+	go func() { secondShutdown <- server.Shutdown(ctx) }()
+	select {
+	case err := <-secondShutdown:
+		t.Fatalf("second Shutdown returned before the active request drained: %v", err)
+	default:
+	}
+	release()
+	for name, result := range map[string]<-chan error{
+		"first":  firstShutdown,
+		"second": secondShutdown,
+	} {
+		select {
+		case err := <-result:
+			if err != nil {
+				t.Errorf("%s Shutdown: %v", name, err)
+			}
+		case <-time.After(time.Second):
+			t.Errorf("%s Shutdown did not finish after request drain", name)
+		}
+	}
+	select {
+	case err := <-requestResult:
+		if err != nil {
+			t.Fatalf("request after drain: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("request did not finish after handler release")
+	}
+	select {
+	case err := <-runResult:
+		if err != nil {
+			t.Fatalf("Run after shared shutdown: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run did not return after shared shutdown")
+	}
+}
+
 func TestServerReturnsUnexpectedServeError(t *testing.T) {
 	t.Parallel()
 

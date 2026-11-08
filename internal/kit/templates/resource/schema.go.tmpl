@@ -1,0 +1,23 @@
+package schema
+
+import (
+	"entgo.io/ent"
+	commonent "github.com/huynhanx03/go-common/pkg/database/ent"
+)
+
+type {{.TypeName}} struct {
+	ent.Schema
+}
+
+func ({{.TypeName}}) Mixin() []ent.Mixin {
+	return []ent.Mixin{
+		commonent.UUIDMixin{},
+		commonent.TimeMixin{},
+{{if .SoftDelete}}
+		commonent.SoftDeleteMixin{},
+{{end}}
+{{if .Modifier}}
+		commonent.ModifierMixin{},
+{{end}}
+	}
+}

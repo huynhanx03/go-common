@@ -8,6 +8,7 @@ report_file="${COVERAGE_REPORT_FILE:-}"
 detail_report_file="${COVERAGE_DETAIL_REPORT_FILE:-}"
 owns_profile=false
 owns_test_events=false
+test_report_file=""
 
 if [[ -z "${profile}" ]]; then
   profile="$(mktemp)"
@@ -24,6 +25,9 @@ cleanup() {
   fi
   if [[ "$owns_test_events" == true ]]; then
     rm -f "$test_events"
+  fi
+  if [[ -n "$test_report_file" ]]; then
+    rm -f "$test_report_file"
   fi
 }
 trap cleanup EXIT
@@ -105,7 +109,8 @@ if [[ -n "$report_file" ]]; then
     test_result="failure"
   fi
 
-  tests="$(jq -s '
+  test_report_file="$(mktemp)"
+  jq -s '
     [.[] | select(.Package? != null)] as $events
     | ([$events[].Package] | unique) as $packages
     | [
@@ -155,7 +160,7 @@ if [[ -n "$report_file" ]]; then
           | {package: .Package, test: .Test}
         ] | .[:30]
       }
-  ' "$test_events")"
+  ' "$test_events" > "$test_report_file"
 
   mkdir -p "$(dirname "$report_file")"
   jq -n \
@@ -163,15 +168,15 @@ if [[ -n "$report_file" ]]; then
     --arg actual "$actual" \
     --arg minimum "$minimum" \
     --argjson coverage_met "$coverage_met" \
-    --argjson tests "$tests" \
+    --slurpfile tests "$test_report_file" \
     --argjson low_coverage_functions "$coverage_functions" \
     '{
-      tests: ($tests + {status: $test_status}),
+      tests: ($tests[0] + {status: $test_status}),
       coverage: {
         total_percent: (if $actual == "" then null else ($actual | tonumber) end),
         minimum_percent: ($minimum | tonumber),
         threshold_met: $coverage_met,
-        packages: ([$tests.packages[] | select(.coverage_percent != null)] | sort_by(.coverage_percent)),
+        packages: ([$tests[0].packages[] | select(.coverage_percent != null)] | sort_by(.coverage_percent)),
         low_coverage_functions: $low_coverage_functions
       }
     }' > "$report_file"

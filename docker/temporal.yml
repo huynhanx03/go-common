@@ -1,0 +1,18 @@
+services:
+  temporal:
+    image: temporalio/temporal:1.10.0
+    command:
+      - server
+      - start-dev
+      - --ip
+      - 0.0.0.0
+      - --ui-ip
+      - 0.0.0.0
+      - --db-filename
+      - /var/lib/temporal/temporal.db
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s

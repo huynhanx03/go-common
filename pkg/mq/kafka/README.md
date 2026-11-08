@@ -1,85 +1,89 @@
-# Kafka Client Package
+# Kafka
 
-This package provides a robust, production-ready Kafka client wrapper for Go, built on top of `IBM/sarama`. It encapsulates complex configuration and provides high-level abstractions for producing and consuming messages with reliability and observability.
+Kafka support is built on IBM Sarama. Producers publish records; consumer groups
+process them at least once.
 
-## Key Features
+## Shared runtime
 
-1.  **Middleware Pattern**: Supports middleware chaining for Consumers, allowing cross-cutting concerns (logging, metrics, recovery) to be applied to message processing.
-2.  **Smart Retry Policy**: Implements exponential backoff strategies for connection retries, ensuring system stability during broker outages.
-3.  **Context Propagation**: Automatically handles the injection and extraction of tracing context (Request ID, Trace ID) via Kafka message headers.
-4.  **Flexible Producers**: specific implementations for both Synchronous (data safety) and Asynchronous (high throughput) publishing.
-5.  **Graceful Shutdown**: Managed lifecycle for consumers to ensure in-flight messages are completed before termination.
-
-## Configuration
-
-The package uses a strongly-typed `Config` struct for initialization:
+Create a `consumer.New` or `consumer.NewBatch` runtime, then inject it:
 
 ```go
-cfg := &kafka.Config{
-    Brokers: []string{"localhost:9092"},
-    ConsumerInfo: kafka.ConsumerInfo{
-        SessionTimeout: 10000, // ms
-    },
+processor, err := consumer.New(handle,
+	consumer.WithWorkers(8),
+	consumer.WithQueueCapacity(256),
+)
+if err != nil {
+	return err
 }
+// Stop the group before closing processor with a shutdown context.
+err = group.StartWithRuntime(ctx, []string{"orders"}, processor, onError, deadLetter)
 ```
 
-## Usage
+The [consumer runtime](../consumer/README.md) owns backpressure, priority,
+batching and shutdown. Kafka supplies one ordering stream per topic/partition.
+Only the completed contiguous prefix of each source window is marked; DLQ
+publication must succeed before marking its message. Key ordering or unordered
+mode permits parallel processing within a partition when the service allows it.
 
-### Consumer
+Groups start once. `Close` cancels consumption and waits for its loop; an
+injected runtime stays caller-owned. `Start` and `StartWithResult` create their
+own runtime, with workers bounded by `GOMAXPROCS`, and close it on exit.
 
-Consumers use a handler-based approach. Middleware can be applied globally to the consumer group.
+## Consumer outcomes
 
-**Example:**
+`pkg/mq/consumer` defines the handler contract shared with Forge:
+
+- `Success`: acknowledge the message.
+- `Retry`: leave it unmarked and end the current claim so Kafka can deliver it
+  again.
+- `DeadLetter`: publish it through the configured dead-letter handler, then
+  acknowledge it only after that handler succeeds.
 
 ```go
-// Define a handler
-func MessageHandler(ctx context.Context, msg *kafka.Message) error {
-    // ctx contains propagated headers (e.g. TraceID)
-    // Process message...
-    return nil
+import (
+	"context"
+
+	"github.com/huynhanx03/go-common/pkg/mq/consumer"
+	"github.com/huynhanx03/go-common/pkg/mq/kafka"
+)
+
+group, err := kafka.NewConsumer(config, "orders-worker")
+if err != nil {
+	return err
 }
+defer group.Close()
 
-// Initialize and Start
-func main() {
-    // Create Consumer with Recovery middleware
-    consumer, _ := kafka.NewConsumer(cfg, "consumer-group-id", kafka.Recovery)
-
-    // Start consuming in a blocking or non-blocking way
-    go func() {
-        err := consumer.Start(context.Background(), []string{"topic-name"}, MessageHandler, func(err error) {
-            // Handle internal consumer errors
-        })
-    }()
-
-    // Graceful shutdown on signal
-    // ...
-    consumer.Close()
-}
+err = group.StartWithResult(
+	ctx,
+	[]string{"orders"},
+	func(ctx context.Context, message consumer.Message) (consumer.Outcome, error) {
+		if err := processOrder(ctx, message.Value); err != nil {
+			return consumer.Retry, err
+		}
+		return consumer.Success, nil
+	},
+	errorHandler,
+	func(ctx context.Context, message consumer.Message, cause error) error {
+		return publishDeadLetter(ctx, message, cause)
+	},
+	consumer.Recovery,
+)
 ```
 
-### Producer
+The dead-letter handler must return nil only after the message is durably
+published. If a handler returns `DeadLetter` without a dead-letter handler, or
+publishing fails, the source message remains unacknowledged and is retried.
+Handlers should not retain message byte slices after returning. Processing is
+at least once; inbox deduplication is an application-level concern.
 
-The package provides helpers for common patterns, such as publishing JSON data with context propagation.
+`Start` remains available for error-only handlers. A nil error maps to
+`Success`; an error maps to `Retry`. Use `StartWithResult` when a handler needs
+to choose `DeadLetter` explicitly. Shared middleware can be passed to
+`StartWithResult`; the runtime already contains handler panics and restores
+request IDs.
 
-**Example:**
+## Producer
 
-```go
-// Initialize Async Producer
-producer, _ := kafka.NewAsyncProducer(cfg)
-
-// Publish message
-// This automatically injects TraceID/RequestID from ctx into Kafka Headers
-err := kafka.PublishJSON(ctx, producer, "topic-name", func(model *MyModel) string {
-    return model.ID // Partition Key
-}, modelInstance)
-```
-
-## Architecture
-
-### Middleware
-Message processing follows an interceptor chain pattern:
-`Middleware 1 -> Middleware 2 -> ... -> Handler`
-
-### Context Propagation
--   **Producer**: Extracts `X-Request-ID` and `X-Trace-ID` from the Go `context.Context` and injects them as Kafka Record Headers.
--   **Consumer**: Reads Kafka Record Headers and reconstructs the `context.Context` before invoking the handler.
+`PublishJSON` serializes a value and publishes it with a caller-selected key.
+The producer helpers also propagate the request ID from context into Kafka
+headers.
