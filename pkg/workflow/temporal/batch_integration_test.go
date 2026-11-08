@@ -49,7 +49,7 @@ func TestTemporalBatchIntegration(t *testing.T) {
 	}
 	t.Cleanup(temporalClient.Close)
 
-	definition := batch.Definition{Key: "temporal/integration/job", InputFingerprint: "source-v1", CursorSchema: "cursor-v1", Boundary: []byte("fixed-cutoff")}
+	definition := batch.Definition{Key: "test-job", InputFingerprint: "source-v1", CursorSchema: "cursor-v1", Boundary: []byte("fixed-cutoff")}
 	workflowID := "batch-recovery-" + fmt.Sprint(time.Now().UnixNano())
 	queue := "batch-integration-" + fmt.Sprint(time.Now().UnixNano())
 	firstPageCommitted := make(chan struct{})
