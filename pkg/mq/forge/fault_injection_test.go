@@ -263,6 +263,47 @@ func TestCommitLogRejectsCompleteCorruptionWithoutTruncating(t *testing.T) {
 	}
 }
 
+func TestReadReportsCompleteCorruptionDiscoveredAfterStartup(t *testing.T) {
+	t.Parallel()
+
+	log, err := NewCommitLog(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	if _, err := log.Append(&RecordBatch{Records: []Record{{Value: []byte("durable event")}}}); err != nil {
+		t.Fatal(err)
+	}
+
+	file, err := os.OpenFile(log.activeSegment.logFile.Name(), os.O_RDWR, filePerm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var corrupted [1]byte
+	if _, err := file.ReadAt(corrupted[:], batchHeaderSize); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	corrupted[0] ^= 0xff
+	if _, err := file.WriteAt(corrupted[:], batchHeaderSize); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := log.Read(0, maxEncodedBatchBytes); err == nil {
+		t.Fatal("Read accepted a complete batch corrupted after startup")
+	} else {
+		var corruption *CorruptionError
+		if !errors.As(err, &corruption) || corruption.SegmentBase != 0 || corruption.ByteOffset != 0 ||
+			!errors.Is(err, ErrChecksumMismatch) {
+			t.Fatalf("Read corruption error = %#v, want checksum corruption at segment 0 byte 0", err)
+		}
+	}
+}
+
 func TestCommitLogTruncatesOnlyIncompleteCrashTail(t *testing.T) {
 	dir := t.TempDir()
 	log, err := NewCommitLog(dir)

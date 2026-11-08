@@ -16,7 +16,7 @@ type asyncProducer struct {
 }
 
 // NewProducer creates a new AsyncProducer
-func NewProducer(cfg *Config) (Producer, error) {
+func NewProducer(cfg *Config) (ProducerWithID, error) {
 	config := sarama.NewConfig()
 	config.ClientID = cfg.ClientID
 
@@ -50,7 +50,16 @@ func NewProducer(cfg *Config) (Producer, error) {
 
 // Publish sends a message to a specific topic
 func (ap *asyncProducer) Publish(ctx context.Context, topic string, key, value []byte) {
-	headers := buildHeaders(ctx)
+	ap.publish(ctx, "", topic, key, value)
+}
+
+// PublishWithID enqueues a message carrying a stable producer-assigned message ID.
+func (ap *asyncProducer) PublishWithID(ctx context.Context, topic, messageID string, key, value []byte) {
+	ap.publish(ctx, messageID, topic, key, value)
+}
+
+func (ap *asyncProducer) publish(ctx context.Context, messageID, topic string, key, value []byte) {
+	headers := buildHeadersWithID(ctx, messageID)
 
 	msg := &sarama.ProducerMessage{
 		Topic:   topic,

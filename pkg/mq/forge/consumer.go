@@ -15,6 +15,7 @@ const DefaultFetchWaitInterval = 100 * time.Millisecond
 // in-memory cursor; CommitOffset is the sole durable acknowledgment operation.
 type Consumer struct {
 	mu              sync.Mutex
+	handleMu        sync.Mutex
 	log             *CommitLog
 	group           string
 	topic           string

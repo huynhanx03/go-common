@@ -8,49 +8,59 @@ import (
 
 	"github.com/huynhanx03/go-common/pkg/encoding/json"
 	"github.com/huynhanx03/go-common/pkg/logger"
+	"github.com/huynhanx03/go-common/pkg/mq/consumer"
 )
 
-// buildContext creates a context from the message headers, restoring the
-// correlation ID stamped by the producer so consumer logs correlate with the
-// request that published the message. Messages without one remain uncorrelated.
-func buildContext(headers []*sarama.RecordHeader) context.Context {
-	ctx := context.Background()
-
-	for _, h := range headers {
-		if string(h.Key) == logger.RequestIDHeader {
-			ctx = logger.WithRequestID(ctx, string(h.Value))
-			break
-		}
-	}
-
-	return ctx
-}
-
-// buildHeaders carries the context's correlation ID into Kafka record headers.
-func buildHeaders(ctx context.Context) []sarama.RecordHeader {
+func buildHeadersWithID(ctx context.Context, messageID string) []sarama.RecordHeader {
 	id := logger.RequestID(ctx)
-	if id == "" {
+	if id == "" && messageID == "" {
 		return nil
 	}
-	return []sarama.RecordHeader{{
-		Key:   []byte(logger.RequestIDHeader),
-		Value: []byte(id),
-	}}
+	headers := make([]sarama.RecordHeader, 0, 2)
+	if id != "" {
+		headers = append(headers, sarama.RecordHeader{
+			Key:   []byte(logger.RequestIDHeader),
+			Value: []byte(id),
+		})
+	}
+	if messageID != "" {
+		headers = append(headers, sarama.RecordHeader{
+			Key:   []byte(consumer.MessageIDHeader),
+			Value: []byte(messageID),
+		})
+	}
+	return headers
 }
 
 // PublishJSON serializes data to JSON and publishes it to the specified topic.
 // It uses a key extracted from the keyFunc or empty if nil.
 func PublishJSON[T any](ctx context.Context, producer Producer, topic string, keyFunc func(T) string, data T) error {
-	bytes, err := json.Marshal(data)
+	payload, key, err := encodeJSON(keyFunc, data)
 	if err != nil {
-		return fmt.Errorf("failed to marshal data: %w", err)
+		return err
 	}
+	producer.Publish(ctx, topic, key, payload)
+	return nil
+}
 
+// PublishJSONWithID serializes and publishes data with a stable message ID.
+func PublishJSONWithID[T any](ctx context.Context, producer ProducerWithID, topic, messageID string, keyFunc func(T) string, data T) error {
+	payload, key, err := encodeJSON(keyFunc, data)
+	if err != nil {
+		return err
+	}
+	producer.PublishWithID(ctx, topic, messageID, key, payload)
+	return nil
+}
+
+func encodeJSON[T any](keyFunc func(T) string, data T) ([]byte, []byte, error) {
+	payload, err := json.Marshal(data)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to marshal data: %w", err)
+	}
 	var key []byte
 	if keyFunc != nil {
 		key = []byte(keyFunc(data))
 	}
-
-	producer.Publish(ctx, topic, key, bytes)
-	return nil
+	return payload, key, nil
 }
