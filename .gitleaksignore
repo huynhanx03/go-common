@@ -1,0 +1,2 @@
+# False positive: test-only batch definition key from commit fb65e28.
+fb65e28d29e40d0774f19c408da75ad394d30a33:pkg/workflow/temporal/batch_integration_test.go:generic-api-key:53
