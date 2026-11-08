@@ -27,25 +27,33 @@ func contextualFields(ctx context.Context, fields []zap.Field) []zap.Field {
 }
 
 func (log *Logger) Debug(ctx context.Context, message string, fields ...zap.Field) {
-	log.base.Debug(message, contextualFields(ctx, fields)...)
+	log.write(ctx, zap.DebugLevel, message, fields...)
 }
 func (log *Logger) Info(ctx context.Context, message string, fields ...zap.Field) {
-	log.base.Info(message, contextualFields(ctx, fields)...)
+	log.write(ctx, zap.InfoLevel, message, fields...)
 }
 func (log *Logger) Warn(ctx context.Context, message string, fields ...zap.Field) {
-	log.base.Warn(message, contextualFields(ctx, fields)...)
+	log.write(ctx, zap.WarnLevel, message, fields...)
 }
 func (log *Logger) Error(ctx context.Context, message string, fields ...zap.Field) {
-	log.base.Error(message, contextualFields(ctx, fields)...)
+	log.write(ctx, zap.ErrorLevel, message, fields...)
 }
 func (log *Logger) DPanic(ctx context.Context, message string, fields ...zap.Field) {
-	log.base.DPanic(message, contextualFields(ctx, fields)...)
+	log.write(ctx, zap.DPanicLevel, message, fields...)
 }
 func (log *Logger) Panic(ctx context.Context, message string, fields ...zap.Field) {
-	log.base.Panic(message, contextualFields(ctx, fields)...)
+	log.write(ctx, zap.PanicLevel, message, fields...)
 }
 func (log *Logger) Fatal(ctx context.Context, message string, fields ...zap.Field) {
-	log.base.Fatal(message, contextualFields(ctx, fields)...)
+	log.write(ctx, zap.FatalLevel, message, fields...)
+}
+
+func (log *Logger) write(ctx context.Context, level zapcore.Level, message string, fields ...zap.Field) {
+	entry := log.base.Check(level, message)
+	if entry == nil {
+		return
+	}
+	entry.Write(contextualFields(ctx, fields)...)
 }
 
 // Core returns the underlying Zap core for compatibility with existing users.

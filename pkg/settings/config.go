@@ -146,9 +146,29 @@ type Redis struct {
 	DialTimeout     int      `mapstructure:"dial_timeout"`
 	ReadTimeout     int      `mapstructure:"read_timeout"`
 	WriteTimeout    int      `mapstructure:"write_timeout"`
-	MaxRetries      int      `mapstructure:"max_retries"`
+	MaxRetries      int      `mapstructure:"max_retries"` // -1 disables per-node retries; 0 uses the package default.
 	MaxRetryBackoff int      `mapstructure:"max_retry_backoff"`
 	MinRetryBackoff int      `mapstructure:"min_retry_backoff"`
+}
+
+// Temporal configures a connection to a Temporal Service.
+type Temporal struct {
+	Address            string `mapstructure:"address"`
+	Namespace          string `mapstructure:"namespace"`
+	APIKey             string `mapstructure:"api_key"`
+	ServerName         string `mapstructure:"server_name"`
+	CAFile             string `mapstructure:"ca_file"`
+	CertFile           string `mapstructure:"cert_file"`
+	KeyFile            string `mapstructure:"key_file"`
+	TLSEnabled         bool   `mapstructure:"tls_enabled"`
+	DialTimeoutSeconds int    `mapstructure:"dial_timeout_seconds"` // Zero inherits the caller's context.
+}
+
+// TemporalWorker configures one worker's identity and graceful shutdown budget.
+type TemporalWorker struct {
+	Name                   string `mapstructure:"name"`
+	TaskQueue              string `mapstructure:"task_queue"`
+	ShutdownTimeoutSeconds int    `mapstructure:"shutdown_timeout_seconds"` // Zero uses the package default.
 }
 
 // Kafka is the configuration for Kafka
