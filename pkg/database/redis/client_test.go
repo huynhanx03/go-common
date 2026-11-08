@@ -123,7 +123,7 @@ func TestValidateConfigOwnsRedisConfigurationRules(t *testing.T) {
 		{name: "idle connections above pool", change: func(c *settings.Redis) { c.MinIdleConns = c.PoolSize + 1 }},
 		{name: "invalid timeout", change: func(c *settings.Redis) { c.ReadTimeout = 0 }},
 		{name: "timeout above limit", change: func(c *settings.Redis) { c.DialTimeout = maxTimeoutSeconds + 1 }},
-		{name: "negative retries", change: func(c *settings.Redis) { c.MaxRetries = -1 }},
+		{name: "retries below disabled sentinel", change: func(c *settings.Redis) { c.MaxRetries = -2 }},
 		{name: "invalid minimum backoff", change: func(c *settings.Redis) { c.MinRetryBackoff = 0 }},
 		{name: "maximum backoff below minimum", change: func(c *settings.Redis) { c.MaxRetryBackoff = c.MinRetryBackoff - 1 }},
 	}
@@ -136,5 +136,47 @@ func TestValidateConfigOwnsRedisConfigurationRules(t *testing.T) {
 				t.Fatalf("validateConfig() error = %v; want ErrInvalidConfig", err)
 			}
 		})
+	}
+}
+
+func TestRedisRetryConfiguration(t *testing.T) {
+	tests := []struct {
+		name       string
+		configured int
+		want       int
+		wantError  bool
+	}{
+		{name: "disabled per-node retries", configured: -1, want: -1},
+		{name: "default retries", configured: 0, want: defaultMaxRetries},
+		{name: "explicit retry count", configured: 5, want: 5},
+		{name: "below disabled sentinel", configured: -2, wantError: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := testRedisConfig("redis:6379")
+			config.MaxRetries = test.configured
+			engine := &RedisEngine{config: config}
+			engine.setDefaultConfig()
+
+			err := validateConfig(*engine.config)
+			if test.wantError {
+				if !errors.Is(err, ErrInvalidConfig) {
+					t.Fatalf("validateConfig() error = %v; want ErrInvalidConfig", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validateConfig() error = %v", err)
+			}
+			if engine.config.MaxRetries != test.want {
+				t.Fatalf("MaxRetries = %d; want %d", engine.config.MaxRetries, test.want)
+			}
+		})
+	}
+
+	config := testRedisConfig("127.0.0.1:1")
+	config.MaxRetries = -2
+	if _, err := NewConnection(config); !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("NewConnection() error = %v; want validation failure before dialing", err)
 	}
 }

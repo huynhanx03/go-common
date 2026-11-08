@@ -17,7 +17,9 @@ func TestRedisIntegration(t *testing.T) {
 	t.Run("commands", func(t *testing.T) { testRedisCommands(t, ctx, engine) })
 	t.Run("geospatial and sorted sets", func(t *testing.T) { testRedisStructures(t, ctx, engine) })
 	t.Run("cache revision fencing", func(t *testing.T) { testCacheRevision(t, ctx, engine) })
+	t.Run("cache version integrity", func(t *testing.T) { testCacheVersionIntegrity(t, ctx, engine) })
 	t.Run("batch cache revocation", func(t *testing.T) { testCacheBatchRevocation(t, ctx, engine) })
+	t.Run("atomic scripts", func(t *testing.T) { testRedisScripts(t, ctx, engine) })
 }
 
 func newTestEngine(t *testing.T) *RedisEngine {

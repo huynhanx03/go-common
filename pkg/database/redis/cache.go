@@ -12,11 +12,6 @@ import (
 	"github.com/huynhanx03/go-common/pkg/common/cache"
 )
 
-const (
-	cacheGenerationPrefix = "__cache_generation__:"
-	cacheRevokeBatchSize  = 128
-)
-
 func cacheGenerationKey(key string) string {
 	tag := key
 	if open := strings.IndexByte(key, '{'); open >= 0 {
@@ -33,7 +28,8 @@ func (r *RedisEngine) SnapshotVersion(ctx context.Context, key string) (string, 
 		return "", ErrInvalidConfig
 	}
 	key = r.scopedKey(key)
-	return cacheSnapshotVersionScript.Run(ctx, r.client, []string{cacheGenerationKey(key)}).Text()
+	version, err := r.runScopedScript(ctx, cacheSnapshotVersionScript, []string{cacheGenerationKey(key)}).Text()
+	return version, mapCacheVersionError(err)
 }
 
 // SetWithVersion conditionally stores already encoded bytes.
@@ -44,16 +40,16 @@ func (r *RedisEngine) SetWithVersion(ctx context.Context, versionKey, storageKey
 	versionKey = r.scopedKey(versionKey)
 	storageKey = r.scopedKey(storageKey)
 	ttlMillis := max(ttl.Milliseconds(), 1)
-	result, err := cacheSetIfVersionScript.Run(
+	result, err := r.runScopedScript(
 		ctx,
-		r.client,
+		cacheSetIfVersionScript,
 		[]string{cacheGenerationKey(versionKey), storageKey},
 		token,
 		value,
 		ttlMillis,
 	).Int64()
 	if err != nil {
-		return err
+		return mapCacheVersionError(err)
 	}
 	return validateCacheWriteResult(result)
 }
@@ -72,12 +68,13 @@ func (r *RedisEngine) DeleteValueWithVersion(ctx context.Context, versionKey, st
 	}
 	versionKey = r.scopedKey(versionKey)
 	storageKey = r.scopedKey(storageKey)
-	return cacheDeleteIfVersionScript.Run(
+	err := r.runScopedScript(
 		ctx,
-		r.client,
+		cacheDeleteIfVersionScript,
 		[]string{cacheGenerationKey(versionKey), storageKey},
 		token,
 	).Err()
+	return mapCacheVersionError(err)
 }
 
 // Revoke advances the revision and removes the cached value and its negative entry.
@@ -86,11 +83,12 @@ func (r *RedisEngine) Revoke(ctx context.Context, key string) error {
 		return ErrInvalidConfig
 	}
 	key = r.scopedKey(key)
-	return cacheRevokeScript.Run(
+	err := r.runScopedScript(
 		ctx,
-		r.client,
+		cacheRevokeScript,
 		[]string{cacheGenerationKey(key), key, key + cache.NegativeKeySuffix},
 	).Err()
+	return mapCacheVersionError(err)
 }
 
 // RevokeMany revokes keys in bounded pipelines, preserving per-key atomicity.
@@ -124,7 +122,7 @@ func (r *RedisEngine) revokeBatch(ctx context.Context, keys []string) error {
 		for _, key := range keys {
 			key = r.scopedKey(key)
 			redisKeys := []string{cacheGenerationKey(key), key, key + cache.NegativeKeySuffix}
-			commands = append(commands, cacheRevokeScript.Eval(ctx, pipeline, redisKeys))
+			commands = append(commands, r.queueScopedScript(ctx, pipeline, cacheRevokeScript, redisKeys))
 		}
 		return nil
 	})
@@ -132,11 +130,11 @@ func (r *RedisEngine) revokeBatch(ctx context.Context, keys []string) error {
 	var errs []error
 	for index, command := range commands {
 		if err := command.Err(); err != nil {
-			errs = append(errs, fmt.Errorf("revoke cache key %q: %w", keys[index], err))
+			errs = append(errs, fmt.Errorf("revoke cache key %q: %w", keys[index], mapCacheVersionError(err)))
 		}
 	}
 	if pipelineErr != nil && len(errs) == 0 {
-		errs = append(errs, pipelineErr)
+		errs = append(errs, mapCacheVersionError(pipelineErr))
 	}
 	return errors.Join(errs...)
 }

@@ -113,7 +113,7 @@ func validateConfig(config settings.Redis) error {
 		config.WriteTimeout <= 0 || config.WriteTimeout > maxTimeoutSeconds {
 		return ErrInvalidConfig
 	}
-	if config.MaxRetries < 0 || config.MinRetryBackoff <= 0 ||
+	if config.MaxRetries < -1 || config.MinRetryBackoff <= 0 ||
 		config.MaxRetryBackoff < config.MinRetryBackoff {
 		return ErrInvalidConfig
 	}
